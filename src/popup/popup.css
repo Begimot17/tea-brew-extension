@@ -1,0 +1,136 @@
+/* Минималистичный попап: одна колонка, тёмная тема с автоподстройкой под светлую. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #14100e;
+  --fg: #f2ece7;
+  --muted: #a8998f;
+  --line: #2c2320;
+  --card: #1c1613;
+  --accent: #c07a4a;
+  --accent-ink: #1a120c;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #fbf7f4;
+    --fg: #221a15;
+    --muted: #7a6a60;
+    --line: #e6dcd4;
+    --card: #ffffff;
+    --accent: #9a5a2c;
+    --accent-ink: #ffffff;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  width: 340px;
+  min-height: 420px;
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px/1.45 system-ui, "Segoe UI", Inter, sans-serif;
+}
+
+section { display: flex; flex-direction: column; min-height: 420px; }
+section[hidden] { display: none; }
+
+.bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.title { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.icon {
+  background: none; border: 0; color: var(--muted);
+  font-size: 16px; line-height: 1; padding: 4px 6px; cursor: pointer; border-radius: 6px;
+}
+.icon:hover { background: var(--card); color: var(--fg); }
+.icon.on { color: var(--accent); }
+
+#search {
+  flex: 1; padding: 6px 10px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--card); color: var(--fg);
+  font: inherit;
+}
+#search:focus { outline: none; border-color: var(--accent); }
+
+.pad { padding: 12px; }
+.center { text-align: center; flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 6px; }
+
+/* ── список сортов ── */
+
+.list { list-style: none; margin: 0; padding: 4px 0; overflow-y: auto; flex: 1; max-height: 420px; }
+
+.list li {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; cursor: pointer;
+}
+.list li:hover { background: var(--card); }
+.list .emoji { font-size: 18px; }
+.list .meta { flex: 1; min-width: 0; }
+.list .nm { font-weight: 500; }
+.list .cat { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list .star { color: var(--accent); }
+.list .group {
+  padding: 8px 12px 2px; color: var(--muted);
+  font-size: 10px; text-transform: uppercase; letter-spacing: .06em; cursor: default;
+}
+.list .group:hover { background: none; }
+
+/* ── настройка заварки ── */
+
+.field-label { display: block; margin: 12px 0 6px; color: var(--muted); font-size: 11px; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  padding: 5px 10px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--card); color: var(--fg); font: inherit;
+}
+.chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+
+.row { display: flex; align-items: center; gap: 6px; }
+#grams {
+  width: 72px; padding: 6px 8px; text-align: center;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--card); color: var(--fg); font: inherit;
+}
+.unit { color: var(--muted); }
+.step-btn {
+  width: 28px; height: 28px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--card); color: var(--fg); font: inherit;
+}
+.link { background: none; border: 0; color: var(--muted); cursor: pointer; font: inherit; text-decoration: underline; }
+
+.hint { margin: 6px 0 0; color: var(--muted); font-size: 11px; }
+.fit { margin: 0; color: var(--muted); font-size: 11px; }
+.preview { margin: 14px 0 0; font-size: 15px; font-weight: 600; }
+
+/* ── заварка ── */
+
+.step-label { margin: 0; color: var(--muted); }
+.clock { font-size: 54px; font-weight: 300; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+.phrase { margin: 0; min-height: 32px; color: var(--fg); }
+
+.dots { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; margin-top: 8px; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line); }
+.dot.done { background: var(--accent); }
+.dot.cur { background: var(--fg); }
+.dot.rinse { border-radius: 2px; }
+
+.controls { display: grid; grid-template-columns: 1fr 1.4fr 1fr; gap: 6px; border-top: 1px solid var(--line); }
+.controls #next { grid-column: 1 / -1; }
+
+button.primary {
+  width: 100%; padding: 9px 12px; border: 0; border-radius: 10px; cursor: pointer;
+  background: var(--accent); color: var(--accent-ink); font: inherit; font-weight: 600;
+}
+button.ghost {
+  padding: 9px 12px; border-radius: 10px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--card); color: var(--fg); font: inherit;
+}
+button:disabled { opacity: .5; cursor: default; }

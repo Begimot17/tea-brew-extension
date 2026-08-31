@@ -1,0 +1,18 @@
+{
+  "appName": {
+    "message": "Чайная — таймер проливов",
+    "description": "Название расширения"
+  },
+  "appShortName": {
+    "message": "Чайная",
+    "description": "Короткое название"
+  },
+  "appDescription": {
+    "message": "Гунфу-таймер: 18 сортов, тайминги проливов от объёма посуды и навески, уведомления и звук.",
+    "description": "Описание в магазине и на chrome://extensions"
+  },
+  "actionTitle": {
+    "message": "Чайная",
+    "description": "Подсказка на иконке в панели"
+  }
+}

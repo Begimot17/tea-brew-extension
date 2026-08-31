@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Чайная</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <!-- Экран выбора -->
+  <section id="pick" hidden>
+    <header class="bar">
+      <input id="search" type="search" placeholder="Поиск чая" autocomplete="off">
+      <button id="to-options" class="icon" title="Настройки" aria-label="Настройки">⚙</button>
+    </header>
+    <ul id="list" class="list"></ul>
+  </section>
+
+  <!-- Экран настройки заварки -->
+  <section id="gear" hidden>
+    <header class="bar">
+      <button id="gear-back" class="icon" aria-label="Назад">←</button>
+      <div class="title"><span id="gear-emoji"></span> <span id="gear-name"></span></div>
+      <button id="fav" class="icon" title="В избранное" aria-label="В избранное">☆</button>
+    </header>
+    <div class="pad">
+      <p id="gear-fit" class="fit"></p>
+
+      <label class="field-label">Объём посуды</label>
+      <div id="volumes" class="chips"></div>
+
+      <label class="field-label" for="grams">Навеска</label>
+      <div class="row">
+        <button class="step-btn" data-grams="-0.5">−</button>
+        <input id="grams" type="number" step="0.1" min="0.1" inputmode="decimal">
+        <span class="unit">г</span>
+        <button class="step-btn" data-grams="0.5">+</button>
+        <button id="grams-reset" class="link">сброс</button>
+      </div>
+      <p id="grams-hint" class="hint"></p>
+
+      <p id="preview" class="preview"></p>
+      <p id="temp" class="hint"></p>
+    </div>
+    <footer class="pad">
+      <button id="start" class="primary">Заваривать</button>
+    </footer>
+  </section>
+
+  <!-- Экран заварки -->
+  <section id="brew" hidden>
+    <header class="bar">
+      <button id="brew-back" class="icon" aria-label="Назад">←</button>
+      <div class="title"><span id="brew-name"></span></div>
+      <button id="stop" class="icon" title="Завершить" aria-label="Завершить">✕</button>
+    </header>
+    <div class="pad center">
+      <p id="step-label" class="step-label"></p>
+      <div id="clock" class="clock">0:00</div>
+      <p id="phrase" class="phrase"></p>
+      <div id="dots" class="dots"></div>
+    </div>
+    <footer class="pad controls">
+      <button id="minus" class="ghost">−5с</button>
+      <button id="toggle" class="primary">Пауза</button>
+      <button id="plus" class="ghost">+5с</button>
+      <button id="next" class="ghost">Дальше</button>
+    </footer>
+  </section>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
