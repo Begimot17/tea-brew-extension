@@ -64,11 +64,6 @@ function curveAt(seq, pos) {
   return seq[seq.length - 1] + growth * (x - (seq.length - 1))
 }
 
-/** Пауза «Залей кипяток» — крупная посуда наливается дольше. */
-export function pourSec(volume) {
-  return clamp(Math.round(8 * Math.pow((volume || 100) / 100, 0.35)), 6, 20)
-}
-
 /** Шаги сессии: промывки + проливы. { label, sec, rinse } */
 export function buildSteps(tea, grams, volume) {
   const steps = []
@@ -86,10 +81,13 @@ export function buildSteps(tea, grams, volume) {
   return steps
 }
 
-/** Общая длительность сессии с паузами на пролив, сек. */
-export function totalSec(steps, volume) {
-  const gap = pourSec(volume)
-  return steps.reduce((s, st) => s + st.sec, 0) + gap * Math.max(0, steps.length - 1)
+/**
+ * Чистое время заварки, сек — сумма шагов.
+ * Пауз между шагами нет: следующий пролив запускает пользователь, поэтому
+ * сколько он льёт и пьёт, расширение не считает.
+ */
+export function totalSec(steps) {
+  return steps.reduce((s, st) => s + st.sec, 0)
 }
 
 export function plural(n, forms) {

@@ -7,14 +7,14 @@
  *   teaKey, teaName, style, seed, grams, volume,
  *   steps: [{ label, sec, rinse }],
  *   idx,                    // индекс текущего шага
- *   status: 'running' | 'gap' | 'await' | 'paused' | 'done',
- *   endTime,                // ms epoch конца текущей фазы (running | gap)
+ *   status: 'running' | 'await' | 'paused' | 'done',
+ *   endTime,                // ms epoch конца текущего шага
  *   leftMs,                 // остаток при паузе
  *   startedAt, doneSteeps
  * }
  */
 
-import { buildSteps, pourSec } from './brew.js'
+import { buildSteps } from './brew.js'
 
 export function createSession(tea, grams, volume, seed) {
   const steps = buildSteps(tea, grams, volume)
@@ -27,11 +27,6 @@ export function createSession(tea, grams, volume, seed) {
   }
 }
 
-export function gapMs(session, settings) {
-  const sec = settings.gapSec > 0 ? settings.gapSec : pourSec(session.volume)
-  return sec * 1000
-}
-
 export function leftMs(session, now = Date.now()) {
   if (session.status === 'paused') return session.leftMs
   if (session.status === 'await' || session.status === 'done') return 0
@@ -39,51 +34,31 @@ export function leftMs(session, now = Date.now()) {
 }
 
 /**
- * Продвинуть сессию, если текущая фаза истекла.
+ * Продвинуть сессию, если текущий шаг истёк.
  * Возвращает { session, events } — events для звука и уведомлений.
  * Идемпотентна: вызывать можно хоть каждую секунду.
  */
-export function tick(session, settings, now = Date.now()) {
-  const events = []
+export function tick(session, _settings, now = Date.now()) {
   let s = { ...session }
+  if (s.status !== 'running' || now < s.endTime) return { session: s, events: [] }
 
-  // Цикл на случай, если воркер спал и истекло сразу несколько фаз.
-  for (let guard = 0; guard < 64; guard++) {
-    if (s.status === 'paused' || s.status === 'await' || s.status === 'done') break
-    if (now < s.endTime) break
+  // Шаг доварился. Сам таймер дальше не идёт: следующий пролив запускает
+  // пользователь, когда реально заварит — сколько он льёт и пьёт, мы не знаем.
+  const step = s.steps[s.idx]
+  const last = s.idx >= s.steps.length - 1
+  const events = [{
+    type: last ? 'finish' : (step.rinse ? 'rinse' : 'steep'),
+    stepIndex: s.idx,
+    label: step.label,
+  }]
+  const doneSteeps = s.doneSteeps + (step.rinse ? 0 : 1)
 
-    if (s.status === 'gap') {
-      // Пауза «залей кипяток» кончилась — пошёл следующий пролив.
-      s = { ...s, status: 'running', endTime: s.endTime + s.steps[s.idx].sec * 1000 }
-      continue
-    }
-
-    // Шаг доварился.
-    const step = s.steps[s.idx]
-    const last = s.idx >= s.steps.length - 1
-    events.push({
-      type: last ? 'finish' : (step.rinse ? 'rinse' : 'steep'),
-      stepIndex: s.idx,
-      label: step.label,
-    })
-    const doneSteeps = s.doneSteeps + (step.rinse ? 0 : 1)
-
-    if (last) {
-      s = { ...s, status: 'done', doneSteeps, leftMs: 0 }
-      break
-    }
-    if (!settings.autoAdvance) {
-      s = { ...s, status: 'await', doneSteeps, leftMs: 0 }
-      break
-    }
-    s = { ...s, status: 'gap', doneSteeps, idx: s.idx + 1, endTime: s.endTime + gapMs(s, settings) }
-  }
-
+  s = { ...s, status: last ? 'done' : 'await', doneSteeps, leftMs: 0 }
   return { session: s, events }
 }
 
 export function pause(session, now = Date.now()) {
-  if (session.status !== 'running' && session.status !== 'gap') return session
+  if (session.status !== 'running') return session
   return { ...session, status: 'paused', leftMs: Math.max(0, session.endTime - now), prev: session.status }
 }
 
@@ -93,8 +68,8 @@ export function resume(session, now = Date.now()) {
   return { ...rest, status: prev || 'running', endTime: now + (session.leftMs || 0), leftMs: 0 }
 }
 
-/** Ручной переход к следующему шагу (кнопка «Дальше» и режим без автоперехода). */
-export function next(session, settings, now = Date.now()) {
+/** Запустить следующий шаг — кнопка «Следующий пролив». */
+export function next(session, now = Date.now()) {
   if (session.status === 'done') return session
   const last = session.idx >= session.steps.length - 1
   if (last) return { ...session, status: 'done', leftMs: 0 }
@@ -102,17 +77,17 @@ export function next(session, settings, now = Date.now()) {
   return { ...session, idx, status: 'running', endTime: now + session.steps[idx].sec * 1000, leftMs: 0 }
 }
 
-/** ±секунды к текущей фазе. */
+/** ±секунды к текущему шагу. */
 export function shift(session, sec, now = Date.now()) {
   if (session.status === 'paused')
     return { ...session, leftMs: Math.max(1000, session.leftMs + sec * 1000) }
-  if (session.status !== 'running' && session.status !== 'gap') return session
+  if (session.status !== 'running') return session
   return { ...session, endTime: Math.max(now + 1000, session.endTime + sec * 1000) }
 }
 
 /** Момент, когда воркеру нужно проснуться; null — таймер не идёт. */
 export function nextWakeAt(session) {
   if (!session) return null
-  if (session.status === 'running' || session.status === 'gap') return session.endTime
+  if (session.status === 'running') return session.endTime
   return null
 }

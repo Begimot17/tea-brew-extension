@@ -8,7 +8,7 @@ import { teaPhrase, teaNotificationTitle, PACK_CLASSIC, PACK_NEUTRAL, PACK_SUNBO
 const catalog = JSON.parse(readFileSync(
   fileURLToPath(new URL('../src/data/tea.json', import.meta.url)), 'utf8'))
 const shou = catalog.find(t => t.key === 'shou_puer')
-const CFG = { autoAdvance: true, gapSec: 0 }
+const CFG = {}
 
 test('сессия стартует с первого шага', () => {
   const s = createSession(shou, 7, 100, 1)
@@ -17,29 +17,31 @@ test('сессия стартует с первого шага', () => {
   assert.equal(nextWakeAt(s), s.endTime)
 })
 
-test('шаг завершается событием и уходит в паузу на пролив', () => {
+test('шаг завершается событием и ждёт пользователя — сам вперёд не бежит', () => {
   const s = createSession(shou, 7, 100, 1)
   const { session, events } = tick(s, CFG, s.endTime + 1)
   assert.equal(events.length, 1)
   assert.equal(events[0].type, 'rinse')     // у шу пуэра первыми идут промывки
-  assert.equal(session.status, 'gap')
-  assert.equal(session.idx, 1)
-})
-
-test('без автоперехода сессия ждёт пользователя', () => {
-  const s = createSession(shou, 7, 100, 1)
-  const { session } = tick(s, { ...CFG, autoAdvance: false }, s.endTime + 1)
   assert.equal(session.status, 'await')
-  assert.equal(nextWakeAt(session), null)
+  assert.equal(session.idx, 0)              // шаг не переключился
+  assert.equal(nextWakeAt(session), null)   // таймер остановлен
 })
 
-test('долгий сон воркера отрабатывает все пропущенные фазы разом', () => {
+test('сон воркера не проматывает сессию: истёк только текущий шаг', () => {
   const s = createSession(shou, 7, 100, 1)
   const { session, events } = tick(s, CFG, s.startedAt + 3_600_000)
+  assert.equal(session.status, 'await')
+  assert.equal(events.length, 1)
+  assert.equal(session.idx, 0)
+})
+
+test('последний шаг завершает сессию', () => {
+  const s = createSession(shou, 7, 100, 1)
+  const lastIdx = s.steps.length - 1
+  const at = { ...s, idx: lastIdx, endTime: s.startedAt + 1000 }
+  const { session, events } = tick(at, CFG, at.endTime + 1)
   assert.equal(session.status, 'done')
   assert.equal(events.at(-1).type, 'finish')
-  assert.equal(events.length, s.steps.length)
-  assert.equal(session.doneSteeps, s.steps.filter(x => !x.rinse).length)
 })
 
 test('tick идемпотентна: повторный вызов не плодит событий', () => {
@@ -62,12 +64,12 @@ test('пауза сохраняет остаток, возобновление �
   assert.equal(r.endTime, at + 63_000)
 })
 
-test('«дальше» перескакивает на следующий шаг, на последнем завершает', () => {
+test('«следующий пролив» запускает следующий шаг, на последнем завершает', () => {
   const s = createSession(shou, 7, 100, 1)
-  const n = next(s, CFG, s.startedAt)
+  const n = next(s, s.startedAt)
   assert.equal(n.idx, 1)
   assert.equal(n.endTime, s.startedAt + s.steps[1].sec * 1000)
-  const last = next({ ...s, idx: s.steps.length - 1 }, CFG, s.startedAt)
+  const last = next({ ...s, idx: s.steps.length - 1 }, s.startedAt)
   assert.equal(last.status, 'done')
 })
 

@@ -11,6 +11,7 @@ import { getSettings, getSession, setSession } from '../lib/storage.js'
 import { tick, pause, resume, next, shift, nextWakeAt, createSession } from '../lib/engine.js'
 import { teaPhrase, teaNotificationTitle, generateSeed } from '../lib/phrases.js'
 import { fmt } from '../lib/brew.js'
+import { clipUrl } from '../lib/voice.js'
 
 const OFFSCREEN_PATH = 'src/offscreen/offscreen.html'
 const KEEPALIVE_ALARM = 'tea-keepalive'
@@ -43,9 +44,23 @@ async function closeOffscreen() {
   if (await hasOffscreen()) await chrome.offscreen.closeDocument().catch(() => {})
 }
 
-async function toOffscreen(msg) {
+/**
+ * createDocument резолвится, когда документ создан, но его модуль к этому
+ * моменту может ещё не выполниться и слушателя сообщений нет — первое
+ * сообщение тогда уходит в пустоту. Поэтому шлём с повторами; вдобавок сам
+ * документ, загрузившись, просит перепланировать (см. 'offscreen-ready').
+ */
+async function toOffscreen(msg, attempts = 4) {
   await ensureOffscreen()
-  try { await chrome.runtime.sendMessage({ target: 'offscreen', ...msg }) } catch { /* документ ещё поднимается */ }
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await chrome.runtime.sendMessage({ target: 'offscreen', ...msg })
+      return true
+    } catch {
+      await new Promise(r => setTimeout(r, 60 * (i + 1)))
+    }
+  }
+  return false
 }
 
 // ── уведомления и звук ───────────────────────────────────────────────────────
@@ -68,7 +83,17 @@ async function announce(session, settings, events) {
         priority: 2,
       })
     }
-    if (settings.sound) await toOffscreen({ type: 'gong', volume: settings.volumeLevel })
+    // Гонг и фраза уходят одним сообщением: развести их по времени —
+    // забота offscreen-документа, воркер к тому моменту может быть выгружен.
+    await toOffscreen({
+      type: 'announce',
+      gong: settings.sound,
+      volume: settings.volumeLevel,
+      text: settings.speech ? phrase : '',
+      clip: settings.speech ? await clipUrl(phrase, settings.pack) : null,
+      speechVolume: settings.speechVolume,
+      rate: settings.speechRate,
+    })
   }
 }
 
@@ -77,14 +102,15 @@ async function announce(session, settings, events) {
 async function schedule(session, settings) {
   const wake = nextWakeAt(session)
   if (wake == null) {
+    // Только останавливаем отсчёт. Документ не закрываем: он ещё доигрывает
+    // гонг и фразу, а без сессии Chrome сам выгрузит его по бездействию.
     await toOffscreen({ type: 'cancel' })
-    if (!session || session.status === 'done') await closeOffscreen()
     return
   }
   await toOffscreen({
     type: 'schedule',
     at: wake,
-    ticks: settings.ticks && session.status === 'running',
+    ticks: settings.ticks,
     volume: settings.volumeLevel,
   })
 }
@@ -130,6 +156,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       case 'expired':
         sendResponse(await advance())
         break
+      case 'offscreen-ready': {
+        // Документ поднялся (или перезапустился) — вернуть ему текущий отсчёт.
+        const cur = await getSession()
+        if (cur) await schedule(cur, await getSettings())
+        sendResponse(null)
+        break
+      }
       case 'beat':
         paintBadge()
         sendResponse(null)
@@ -141,7 +174,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse(await mutate(s => resume(s)))
         break
       case 'next':
-        sendResponse(await mutate((s, cfg) => next(s, cfg)))
+        sendResponse(await mutate(s => next(s)))
         break
       case 'shift':
         sendResponse(await mutate(s => shift(s, msg.sec)))
@@ -155,7 +188,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         break
       case 'test-sound': {
         const cfg = await getSettings()
-        await toOffscreen({ type: 'gong', volume: cfg.volumeLevel })
+        await toOffscreen({ type: 'announce', gong: true, volume: cfg.volumeLevel, text: '' })
+        sendResponse(null)
+        break
+      }
+      case 'test-voice': {
+        const cfg = await getSettings()
+        const phrase = msg.text
+        await toOffscreen({
+          type: 'announce', gong: false, text: phrase,
+          clip: await clipUrl(phrase, cfg.pack),
+          speechVolume: cfg.speechVolume, rate: cfg.speechRate,
+        })
         sendResponse(null)
         break
       }

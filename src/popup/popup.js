@@ -5,7 +5,7 @@
  */
 
 import {
-  VOLUMES, buildSteps, recommendedGrams, steepCount, totalSec, pourSec,
+  VOLUMES, buildSteps, recommendedGrams, steepCount, totalSec,
   fmt, plural, steepWord, timeFit, steepHint, teaGroup,
 } from '../lib/brew.js'
 import { teaPhrase } from '../lib/phrases.js'
@@ -123,11 +123,11 @@ function renderGear() {
 
   const n = steepCount(tea, grams, volume)
   const steps = buildSteps(tea, grams, volume)
-  const total = totalSec(steps, volume)
+  const total = totalSec(steps)
   const w = plural(n, steepWord(tea.style))
   const rinses = tea.rinses ? ` · ${tea.rinses} ${plural(tea.rinses, ['промывка', 'промывки', 'промывок'])}` : ''
   $('preview').textContent = `${n} ${w} · ~${Math.round(total / 60)} мин${rinses}`
-  $('temp').textContent = `${tea.temp} °C · пауза на пролив ${pourSec(volume)} с · ${tea.tips || ''}`
+  $('temp').textContent = `${tea.temp} °C · ${tea.tips || ''}`
 }
 
 function setGrams(v) {
@@ -152,28 +152,29 @@ function renderBrew() {
   const step = session.steps[session.idx]
   $('brew-name').textContent = session.teaName
 
-  const gap = session.status === 'gap'
-  $('step-label').textContent = gap
-    ? 'Залей кипяток'
-    : session.status === 'done'
-      ? 'Сессия завершена'
-      : session.status === 'await'
-        ? `Готово — ${step.label}`
-        : `${step.label} · ${steepHint(tea || teaFromSession(), session.idx)}`
+  const waiting = session.status === 'await'
+  $('step-label').textContent = session.status === 'done'
+    ? 'Сессия завершена'
+    : waiting
+      ? `${step.label} готов — снимай`
+      : `${step.label} · ${steepHint(tea || teaFromSession(), session.idx)}`
 
   if (session.status === 'done') {
     const mins = Math.round((Date.now() - session.startedAt) / 60000)
     $('clock').textContent = '🍵'
     $('phrase').textContent = `${session.doneSteeps} ${plural(session.doneSteeps, steepWord(session.style))} · ${mins} мин`
+  } else if (waiting) {
+    // Таймер отработал и стоит: следующий пролив запускает пользователь.
+    const nextStep = session.steps[session.idx + 1]
+    $('clock').textContent = nextStep ? fmt(nextStep.sec) : '0:00'
+    $('phrase').textContent = teaPhrase(step.rinse ? 'rinse' : 'steep', session.idx, session.seed,
+      settings.name || undefined, { pack: settings.pack, teaKey: session.teaKey })
   } else {
     const left = session.status === 'paused'
       ? session.leftMs
       : Math.max(0, session.endTime - Date.now())
     $('clock').textContent = fmt(Math.ceil(left / 1000))
-    $('phrase').textContent = session.status === 'await'
-      ? teaPhrase(step.rinse ? 'rinse' : 'steep', session.idx, session.seed, settings.name || undefined,
-        { pack: settings.pack, teaKey: session.teaKey })
-      : ''
+    $('phrase').textContent = ''
   }
 
   const dots = $('dots')
@@ -187,19 +188,48 @@ function renderBrew() {
   })
 
   const done = session.status === 'done'
+  // В ожидании кнопка «Пауза» бессмысленна — таймер и так стоит.
+  $('toggle').hidden = waiting
   $('toggle').textContent = done ? 'Заново' : session.status === 'paused' ? 'Продолжить' : 'Пауза'
-  $('next').textContent = session.status === 'await' ? 'Следующий пролив' : 'Дальше'
+  const nextStep = session.steps[session.idx + 1]
+  $('next').textContent = waiting
+    ? (nextStep ? `Следующий: ${nextStep.label} · ${fmt(nextStep.sec)}` : 'Завершить')
+    : 'Дальше'
+  $('next').classList.toggle('primary', waiting)
+  $('next').classList.toggle('ghost', !waiting)
   $('next').disabled = done
-  $('minus').disabled = done
-  $('plus').disabled = done
+  $('minus').disabled = done || waiting
+  $('plus').disabled = done || waiting
+}
+
+let syncing = false
+let lastNudge = 0
+
+/**
+ * Досчитал до нуля — просим воркер продвинуть сессию.
+ * Обычно он делает это сам по сигналу offscreen-документа, но воркер могли
+ * выгрузить; при открытом попапе ждать до минутного аларма незачем.
+ */
+async function nudge() {
+  // rAF зовёт нас 60 раз в секунду — воркеру хватит и одного запроса в 300 мс.
+  if (syncing || Date.now() - lastNudge < 300) return
+  syncing = true
+  lastNudge = Date.now()
+  try {
+    const fresh = await chrome.runtime.sendMessage({ type: 'sync' })
+    if (fresh) { session = fresh; renderBrew() }
+  } catch { /* воркер поднимается */ } finally {
+    syncing = false
+  }
 }
 
 function loop() {
   cancelAnimationFrame(raf)
   const step = () => {
     renderBrew()
-    if (session && session.status !== 'done' && session.status !== 'await' && session.status !== 'paused')
-      raf = requestAnimationFrame(step)
+    const live = session && session.status === 'running'
+    if (live && session.endTime - Date.now() <= 0) nudge()
+    if (live) raf = requestAnimationFrame(step)
   }
   step()
 }

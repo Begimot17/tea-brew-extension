@@ -74,6 +74,48 @@ function playTick(volume = 0.6) {
   o.start(now); o.stop(now + 0.13)
 }
 
+// ── озвучка ──────────────────────────────────────────────────────────────────
+
+let clipEl = null
+
+/**
+ * Сказать фразу: сначала записанный клип, иначе системный синтез.
+ * Если клип есть, но не проигрался (битый файл, политика автоплея),
+ * фраза не теряется — её дочитает синтез.
+ */
+function say({ text, clip, volume = 0.9, rate = 1 }) {
+  if (!text) return
+  if (clip) {
+    try {
+      if (clipEl) { try { clipEl.pause() } catch { /* уже остановлен */ } }
+      clipEl = new Audio(clip)
+      clipEl.volume = Math.min(1, Math.max(0, volume))
+      const p = clipEl.play()
+      if (p?.catch) p.catch(() => speak(text, volume, rate))
+      return
+    } catch { /* падаем в синтез */ }
+  }
+  speak(text, volume, rate)
+}
+
+/** Гонг, следом фраза — чтобы не звучали друг поверх друга. */
+function announce({ gong, volume, text, clip, speechVolume = 0.9, rate = 1 }) {
+  if (gong) playGong(volume ?? vol)
+  if (!text) return
+  setTimeout(() => say({ text, clip, volume: speechVolume, rate }), gong ? 1200 : 0)
+}
+
+function speak(text, volume, rate) {
+  try {
+    const u = new SpeechSynthesisUtterance(text)
+    u.lang = 'ru-RU'
+    u.volume = Math.min(1, Math.max(0, volume))
+    u.rate = rate
+    speechSynthesis.cancel()
+    speechSynthesis.speak(u)
+  } catch { /* синтез недоступен — остаётся уведомление и гонг */ }
+}
+
 // ── планирование ─────────────────────────────────────────────────────────────
 
 function clear() {
@@ -113,5 +155,9 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg?.target !== 'offscreen') return
   if (msg.type === 'schedule') schedule(msg.at, msg.ticks, msg.volume)
   else if (msg.type === 'cancel') { clear(); stopAnchor() }
-  else if (msg.type === 'gong') playGong(msg.volume ?? vol)
+  else if (msg.type === 'announce') announce(msg)
 })
+
+// Просим воркер вернуть отсчёт: документ мог быть создан только что или
+// перезапущен после выгрузки, и присланное до этого расписание потерялось.
+chrome.runtime.sendMessage({ type: 'offscreen-ready' }).catch(() => {})

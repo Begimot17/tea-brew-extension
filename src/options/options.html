@@ -33,7 +33,24 @@
         <input id="volumeLevel" type="range" min="0" max="1" step="0.05">
       </label>
       <label class="row"><span>Системные уведомления</span><input id="notifications" type="checkbox"></label>
-      <button id="test" class="ghost">Проверить звук</button>
+      <button id="test" class="ghost">Проверить гонг</button>
+    </section>
+
+    <section>
+      <h2>Озвучка</h2>
+      <label class="row"><span>Проговаривать фразу голосом</span><input id="speech" type="checkbox"></label>
+      <p class="hint">
+        Пророк Санбой говорит записанным голосом, остальные наборы — системным синтезом речи.
+      </p>
+      <label class="row">
+        <span>Громкость озвучки</span>
+        <input id="speechVolume" type="range" min="0" max="1" step="0.05">
+      </label>
+      <label class="row">
+        <span>Скорость речи</span>
+        <input id="speechRate" type="range" min="0.6" max="1.6" step="0.05">
+      </label>
+      <button id="test-voice" class="ghost">Проверить голос</button>
     </section>
 
     <section>
@@ -42,17 +59,7 @@
         <span>Объём посуды по умолчанию</span>
         <select id="defaultVolume"></select>
       </label>
-      <label class="row"><span>Сам переходить к следующему проливу</span><input id="autoAdvance" type="checkbox"></label>
-      <label class="row">
-        <span>Пауза на пролив</span>
-        <select id="gapSec">
-          <option value="0">Авто (от объёма)</option>
-          <option value="5">5 с</option>
-          <option value="8">8 с</option>
-          <option value="12">12 с</option>
-          <option value="20">20 с</option>
-        </select>
-      </label>
+      <p class="hint">Следующий пролив запускается кнопкой — таймер сам вперёд не бежит.</p>
     </section>
 
     <section>

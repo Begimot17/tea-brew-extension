@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import {
-  buildSteps, steepCount, strengthRatio, recommendedGrams, pourSec, totalSec, plural,
+  buildSteps, steepCount, strengthRatio, recommendedGrams, totalSec, plural,
 } from '../src/lib/brew.js'
 
 const catalog = JSON.parse(readFileSync(
@@ -68,17 +68,10 @@ test('промывки идут первыми и в нужном количес
   assert.ok(steps.every(s => s.sec >= 3))
 })
 
-test('пауза на пролив растёт с объёмом и остаётся в границах', () => {
-  assert.ok(pourSec(60) <= pourSec(200))
-  assert.ok(pourSec(200) <= pourSec(500))
-  assert.ok(pourSec(10) >= 6 && pourSec(5000) <= 20)
-})
-
-test('общая длительность учитывает паузы между шагами', () => {
+test('общая длительность — сумма шагов, без пауз между ними', () => {
   const t = tea('shou_puer')
   const steps = buildSteps(t, 7, 100)
-  const bare = steps.reduce((s, x) => s + x.sec, 0)
-  assert.equal(totalSec(steps, 100), bare + pourSec(100) * (steps.length - 1))
+  assert.equal(totalSec(steps), steps.reduce((s, x) => s + x.sec, 0))
 })
 
 test('все сорта каталога считаются без сбоев', () => {

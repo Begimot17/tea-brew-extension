@@ -9,9 +9,10 @@ export const DEFAULT_SETTINGS = {
   ticks: true,             // тики на последних 3 секундах
   volumeLevel: 0.6,        // громкость 0..1
   notifications: true,     // системные уведомления
+  speech: true,            // проговаривать фразу голосом
+  speechVolume: 0.9,       // громкость озвучки 0..1
+  speechRate: 1,           // скорость речи синтеза
   defaultVolume: 100,      // объём посуды по умолчанию, мл
-  autoAdvance: true,       // сам переходить к следующему проливу
-  gapSec: 0,               // 0 = авто (зависит от объёма), иначе фикс. пауза
 }
 
 const SETTINGS_KEY = 'settings'

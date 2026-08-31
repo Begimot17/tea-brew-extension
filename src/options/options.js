@@ -5,8 +5,8 @@ import { PACKS, teaPhrase, generateSeed } from '../lib/phrases.js'
 import { VOLUMES } from '../lib/brew.js'
 
 const $ = id => document.getElementById(id)
-const BOOLS = ['sound', 'ticks', 'notifications', 'autoAdvance']
-const NUMS = ['volumeLevel', 'defaultVolume', 'gapSec']
+const BOOLS = ['sound', 'ticks', 'notifications', 'speech']
+const NUMS = ['volumeLevel', 'defaultVolume', 'speechVolume', 'speechRate']
 const TEXTS = ['pack', 'name']
 
 let settings = DEFAULT_SETTINGS
@@ -25,11 +25,16 @@ function render() {
 }
 
 /** Живой пример: та же функция, что и в уведомлениях. */
-function renderSample() {
+function samplePhrases() {
   const seed = generateSeed(2024)
-  const parts = [0, 1, 2].map(i =>
+  return [0, 1, 2].map(i =>
     teaPhrase('steep', i, seed, settings.name || undefined, { pack: settings.pack, teaKey: 'shou_puer' }))
-  $('sample').textContent = parts.join(' · ')
+}
+
+const sampleFirst = () => samplePhrases()[0]
+
+function renderSample() {
+  $('sample').textContent = samplePhrases().join(' · ')
 }
 
 let savedTimer = null
@@ -54,6 +59,10 @@ function wire() {
   $('test').addEventListener('click', () => {
     // Гонг играет offscreen-документ — тот же путь, что и в реальной заварке.
     chrome.runtime.sendMessage({ type: 'test-sound' })
+  })
+  $('test-voice').addEventListener('click', () => {
+    // Озвучиваем ровно ту фразу, что показана в примере.
+    chrome.runtime.sendMessage({ type: 'test-voice', text: sampleFirst() })
   })
 
   $('reset-session').addEventListener('click', async () => {
