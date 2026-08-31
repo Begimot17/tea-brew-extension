@@ -161,7 +161,7 @@ function renderBrew() {
   $('step-label').textContent = session.status === 'done'
     ? 'Сессия завершена'
     : waiting
-      ? `${step.label} готов — снимай`
+      ? `${step.label} · ${step.rinse ? 'ополосни лист' : 'залей воду и жми старт'}`
       : `${step.label} · ${steepHint(tea || teaFromSession(), session.idx, session.mode)}`
 
   if (session.status === 'done') {
@@ -172,11 +172,13 @@ function renderBrew() {
       : ['настой', 'настоя', 'настоев']
     $('phrase').textContent = `${session.doneSteeps} ${plural(session.doneSteeps, word)} · ${mins} мин`
   } else if (waiting) {
-    // Таймер отработал и стоит: следующий пролив запускает пользователь.
-    const nextStep = session.steps[session.idx + 1]
-    $('clock').textContent = nextStep ? fmt(nextStep.sec) : '0:00'
-    $('phrase').textContent = teaPhrase(step.rinse ? 'rinse' : 'steep', session.idx, session.seed,
-      settings.name || undefined, { pack: settings.pack, teaKey: session.teaKey })
+    // Таймер стоит: на часах — сколько продлится шаг, запускает его кнопка.
+    $('clock').textContent = fmt(step.sec)
+    const prev = session.steps[session.idx - 1]
+    $('phrase').textContent = prev
+      ? teaPhrase(prev.rinse ? 'rinse' : 'steep', session.idx - 1, session.seed,
+        settings.name || undefined, { pack: settings.pack, teaKey: session.teaKey })
+      : ''
   } else {
     const left = session.status === 'paused'
       ? session.leftMs
@@ -196,18 +198,15 @@ function renderBrew() {
   })
 
   const done = session.status === 'done'
-  // В ожидании кнопка «Пауза» бессмысленна — таймер и так стоит.
-  $('toggle').hidden = waiting
-  $('toggle').textContent = done ? 'Заново' : session.status === 'paused' ? 'Продолжить' : 'Пауза'
-  const nextStep = session.steps[session.idx + 1]
-  $('next').textContent = waiting
-    ? (nextStep ? `Следующий: ${nextStep.label} · ${fmt(nextStep.sec)}` : 'Завершить')
-    : 'Дальше'
-  $('next').classList.toggle('primary', waiting)
-  $('next').classList.toggle('ghost', !waiting)
+  // Пока шаг не запущен, главная кнопка — «Старт»; «Пауза» тут бессмысленна.
+  $('toggle').textContent = done ? 'Заново'
+    : waiting ? 'Старт'
+      : session.status === 'paused' ? 'Продолжить' : 'Пауза'
+  $('next').textContent = 'Пропустить'
   $('next').disabled = done
-  $('minus').disabled = done || waiting
-  $('plus').disabled = done || waiting
+  // ±5 с в ожидании правят саму длительность шага — иногда лист просит иначе.
+  $('minus').disabled = done
+  $('plus').disabled = done
 }
 
 let syncing = false
@@ -284,9 +283,10 @@ function wire() {
   $('toggle').addEventListener('click', async () => {
     if (!session) return
     if (session.status === 'done') { await send({ type: 'start', tea, grams, volume }); return }
+    if (session.status === 'await') { await send({ type: 'start-step' }); return }
     await send({ type: session.status === 'paused' ? 'resume' : 'pause' })
   })
-  $('next').addEventListener('click', () => send({ type: 'next' }))
+  $('next').addEventListener('click', () => send({ type: 'skip' }))
   $('minus').addEventListener('click', () => send({ type: 'shift', sec: -5 }))
   $('plus').addEventListener('click', () => send({ type: 'shift', sec: 5 }))
   $('stop').addEventListener('click', async () => {

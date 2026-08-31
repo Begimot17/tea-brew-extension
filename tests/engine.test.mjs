@@ -2,7 +2,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { createSession, tick, pause, resume, next, shift, nextWakeAt } from '../src/lib/engine.js'
+import {
+  createSession, tick, pause, resume, startStep, skip, shift, nextWakeAt, currentStep, leftMs,
+} from '../src/lib/engine.js'
 import { teaPhrase, teaNotificationTitle, PACK_CLASSIC, PACK_NEUTRAL, PACK_SUNBOY } from '../src/lib/phrases.js'
 
 const catalog = JSON.parse(readFileSync(
@@ -10,50 +12,86 @@ const catalog = JSON.parse(readFileSync(
 const shou = catalog.find(t => t.key === 'shou_puer')
 const CFG = {}
 
-test('сессия стартует с первого шага', () => {
-  const s = createSession(shou, 7, 100, 1)
+const fresh = () => createSession(shou, 7, 100, 1)
+
+// ── запуск только по кнопке ──────────────────────────────────────────────────
+
+test('сессия ждёт старта, а не бежит сама', () => {
+  const s = fresh()
+  assert.equal(s.status, 'await')
   assert.equal(s.idx, 0)
-  assert.equal(s.status, 'running')
-  assert.equal(nextWakeAt(s), s.endTime)
+  assert.equal(nextWakeAt(s), null)
+  // На часах — длительность предстоящего шага.
+  assert.equal(leftMs(s), s.steps[0].sec * 1000)
 })
 
-test('шаг завершается событием и ждёт пользователя — сам вперёд не бежит', () => {
-  const s = createSession(shou, 7, 100, 1)
+test('«Старт» запускает шаг, на котором стоим', () => {
+  const s = fresh()
+  const t0 = 1_000_000
+  const r = startStep(s, t0)
+  assert.equal(r.status, 'running')
+  assert.equal(r.idx, 0)
+  assert.equal(r.endTime, t0 + s.steps[0].sec * 1000)
+  assert.equal(nextWakeAt(r), r.endTime)
+})
+
+test('пока шаг не запущен, время не идёт', () => {
+  const s = fresh()
+  const { session, events } = tick(s, CFG, s.startedAt + 3_600_000)
+  assert.equal(session.status, 'await')
+  assert.deepEqual(events, [])
+})
+
+test('конец шага объявляется и сессия встаёт перед следующим', () => {
+  const s = startStep(fresh(), 1000)
   const { session, events } = tick(s, CFG, s.endTime + 1)
   assert.equal(events.length, 1)
   assert.equal(events[0].type, 'rinse')     // у шу пуэра первыми идут промывки
+  assert.equal(events[0].stepIndex, 0)
   assert.equal(session.status, 'await')
-  assert.equal(session.idx, 0)              // шаг не переключился
-  assert.equal(nextWakeAt(session), null)   // таймер остановлен
-})
-
-test('сон воркера не проматывает сессию: истёк только текущий шаг', () => {
-  const s = createSession(shou, 7, 100, 1)
-  const { session, events } = tick(s, CFG, s.startedAt + 3_600_000)
-  assert.equal(session.status, 'await')
-  assert.equal(events.length, 1)
-  assert.equal(session.idx, 0)
-})
-
-test('последний шаг завершает сессию', () => {
-  const s = createSession(shou, 7, 100, 1)
-  const lastIdx = s.steps.length - 1
-  const at = { ...s, idx: lastIdx, endTime: s.startedAt + 1000 }
-  const { session, events } = tick(at, CFG, at.endTime + 1)
-  assert.equal(session.status, 'done')
-  assert.equal(events.at(-1).type, 'finish')
+  assert.equal(session.idx, 1)              // стоим перед следующим шагом
+  assert.equal(nextWakeAt(session), null)
 })
 
 test('tick идемпотентна: повторный вызов не плодит событий', () => {
-  const s = createSession(shou, 7, 100, 1)
+  const s = startStep(fresh(), 1000)
   const first = tick(s, CFG, s.endTime + 1)
-  const again = tick(first.session, CFG, s.endTime + 1)
-  assert.equal(again.events.length, 0)
-  assert.equal(again.session.status, first.session.status)
+  const again = tick(first.session, CFG, s.endTime + 10_000)
+  assert.deepEqual(again.events, [])
+  assert.equal(again.session.status, 'await')
+  assert.equal(again.session.idx, first.session.idx)
 })
 
+test('сон воркера не проматывает сессию дальше одного шага', () => {
+  const s = startStep(fresh(), 1000)
+  const { session, events } = tick(s, CFG, s.endTime + 3_600_000)
+  assert.equal(events.length, 1)
+  assert.equal(session.idx, 1)
+  assert.equal(session.status, 'await')
+})
+
+test('последний шаг завершает сессию', () => {
+  const s = fresh()
+  const lastIdx = s.steps.length - 1
+  const at = startStep({ ...s, idx: lastIdx }, 1000)
+  const { session, events } = tick(at, CFG, at.endTime + 1)
+  assert.equal(session.status, 'done')
+  assert.equal(events.at(-1).type, 'finish')
+  assert.equal(nextWakeAt(session), null)
+})
+
+test('промывки не считаются проливами', () => {
+  let s = fresh()
+  for (let i = 0; i < shou.rinses; i++) s = tick(startStep(s, 1000), CFG, 10_000_000).session
+  assert.equal(s.doneSteeps, 0)
+  s = tick(startStep(s, 1000), CFG, 10_000_000).session
+  assert.equal(s.doneSteeps, 1)
+})
+
+// ── управление ───────────────────────────────────────────────────────────────
+
 test('пауза сохраняет остаток, возобновление его возвращает', () => {
-  const s = createSession(shou, 7, 100, 1)
+  const s = startStep(fresh(), 1000)
   const at = s.endTime - 3000
   const p = pause(s, at)
   assert.equal(p.status, 'paused')
@@ -64,23 +102,31 @@ test('пауза сохраняет остаток, возобновление �
   assert.equal(r.endTime, at + 63_000)
 })
 
-test('«следующий пролив» запускает следующий шаг, на последнем завершает', () => {
-  const s = createSession(shou, 7, 100, 1)
-  const n = next(s, s.startedAt)
+test('«Пропустить» встаёт перед следующим шагом, не запуская его', () => {
+  const s = startStep(fresh(), 1000)
+  const n = skip(s)
   assert.equal(n.idx, 1)
-  assert.equal(n.endTime, s.startedAt + s.steps[1].sec * 1000)
-  const last = next({ ...s, idx: s.steps.length - 1 }, s.startedAt)
+  assert.equal(n.status, 'await')
+  assert.equal(nextWakeAt(n), null)
+  const last = skip({ ...s, idx: s.steps.length - 1 })
   assert.equal(last.status, 'done')
 })
 
-test('±секунды двигают конец фазы и остаток на паузе', () => {
-  const s = createSession(shou, 7, 100, 1)
-  assert.equal(shift(s, 5, s.startedAt).endTime, s.endTime + 5000)
-  const p = pause(s, s.endTime - 10_000)
+test('±секунды: в ожидании правят длительность шага, на ходу — остаток', () => {
+  const s = fresh()
+  const longer = shift(s, 5)
+  assert.equal(currentStep(longer).sec, s.steps[0].sec + 5)
+  assert.equal(longer.steps[1].sec, s.steps[1].sec, 'соседние шаги не трогаем')
+  assert.ok(shift(s, -600).steps[0].sec >= 3, 'шаг не схлопывается в ноль')
+
+  const run = startStep(s, 1000)
+  assert.equal(shift(run, 5, 1000).endTime, run.endTime + 5000)
+  const p = pause(run, run.endTime - 10_000)
   assert.equal(shift(p, -5).leftMs, 5000)
-  // Ниже секунды не опускаемся, иначе шаг схлопнется в ноль.
   assert.equal(shift(p, -600).leftMs, 1000)
 })
+
+// ── фразы ────────────────────────────────────────────────────────────────────
 
 test('фразы детерминированы и зависят от пака', () => {
   const a = teaPhrase('steep', 3, 42, undefined, { pack: PACK_CLASSIC, teaKey: 'shou_puer' })

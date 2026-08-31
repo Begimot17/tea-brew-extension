@@ -8,7 +8,7 @@
  */
 
 import { getSettings, getSession, setSession, voiceFor } from '../lib/storage.js'
-import { tick, pause, resume, next, shift, nextWakeAt, createSession } from '../lib/engine.js'
+import { tick, pause, resume, startStep, skip, shift, nextWakeAt, createSession } from '../lib/engine.js'
 import { teaPhrase, teaNotificationTitle, generateSeed } from '../lib/phrases.js'
 import { fmt } from '../lib/brew.js'
 import { clipUrl, voiceName } from '../lib/voice.js'
@@ -192,27 +192,54 @@ async function schedule(session, settings) {
   })
 }
 
-/** Пересчитать истёкшие фазы, разослать события, перепланировать. */
-async function advance() {
-  const session = await getSession()
-  if (!session) { await closeOffscreen(); return null }
-  const settings = await getSettings()
-  const { session: nextS, events } = tick(session, settings)
-  if (events.length) await announce(nextS, settings, events)
-  await setSession(nextS)
-  await schedule(nextS, settings)
-  return nextS
+/**
+ * Очередь операций над сессией.
+ *
+ * Конец шага замечают сразу несколько источников: offscreen-документ, минутный
+ * аларм и открытый попап. Без очереди они читали одну и ту же ещё не
+ * обновлённую сессию, и каждый объявлял конец шага сам — фраза звучала дважды.
+ */
+let queue = Promise.resolve()
+
+function serial(fn) {
+  const run = queue.then(fn, fn)
+  queue = run.then(() => {}, () => {})
+  return run
+}
+
+/** Пересчитать истёкший шаг, объявить его и перепланировать. */
+function advance() {
+  return serial(async () => {
+    const session = await getSession()
+    if (!session) return null
+    const settings = await getSettings()
+    const { session: nextS, events } = tick(session, settings)
+
+    // Сначала фиксируем состояние, потом объявляем: озвучка занимает секунды,
+    // и всё это время параллельный вызов видел бы шаг незакрытым.
+    const fresh = events.length && nextS.announcedIdx !== events[0].stepIndex
+    if (fresh) nextS.announcedIdx = events[0].stepIndex
+    await setSession(nextS)
+    await schedule(nextS, settings)
+
+    // Ждём озвучку: состояние уже сохранено, гонки это не создаёт, зато
+    // воркер не уснёт на полуслове.
+    if (fresh) await announce(nextS, settings, events)
+    return nextS
+  })
 }
 
 /** Изменить сессию функцией-мутатором и перепланировать. */
-async function mutate(fn) {
-  const session = await getSession()
-  if (!session) return null
-  const settings = await getSettings()
-  const nextS = fn(session, settings)
-  await setSession(nextS)
-  await schedule(nextS, settings)
-  return nextS
+function mutate(fn) {
+  return serial(async () => {
+    const session = await getSession()
+    if (!session) return null
+    const settings = await getSettings()
+    const nextS = fn(session, settings)
+    await setSession(nextS)
+    await schedule(nextS, settings)
+    return nextS
+  })
 }
 
 // ── сообщения от попапа и offscreen ──────────────────────────────────────────
@@ -223,11 +250,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   ;(async () => {
     switch (msg?.type) {
       case 'start': {
-        const settings = await getSettings()
-        const session = createSession(msg.tea, msg.grams, msg.volume, generateSeed())
-        await setSession(session)
-        await schedule(session, settings)
-        sendResponse(session)
+        sendResponse(await serial(async () => {
+          const settings = await getSettings()
+          const session = createSession(msg.tea, msg.grams, msg.volume, generateSeed())
+          await setSession(session)
+          await schedule(session, settings)
+          return session
+        }))
         break
       }
       case 'expired':
@@ -254,14 +283,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       case 'resume':
         sendResponse(await mutate(s => resume(s)))
         break
-      case 'next':
-        sendResponse(await mutate(s => next(s)))
+      case 'start-step':
+        sendResponse(await mutate(s => startStep(s)))
+        break
+      case 'skip':
+        sendResponse(await mutate(s => skip(s)))
         break
       case 'shift':
         sendResponse(await mutate(s => shift(s, msg.sec)))
         break
       case 'stop':
-        await setSession(null)
+        await serial(() => setSession(null))
         await toOffscreen({ type: 'cancel' })
         try { chrome.tts.stop() } catch { /* синтез не запускался */ }
         await closeOffscreen()
