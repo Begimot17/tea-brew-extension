@@ -17,6 +17,11 @@
       </label>
       <p id="pack-hint" class="hint"></p>
       <label class="row">
+        <span>Голос набора</span>
+        <select id="voice"></select>
+      </label>
+      <p id="voice-hint" class="hint"></p>
+      <label class="row">
         <span>Обращаться по имени</span>
         <input id="name" type="text" placeholder="пусто — без имени" maxlength="24">
       </label>
@@ -50,6 +55,7 @@
         <span>Скорость речи</span>
         <input id="speechRate" type="range" min="0.6" max="1.6" step="0.05">
       </label>
+      <p id="voices" class="hint"></p>
       <button id="test-voice" class="ghost">Проверить голос</button>
     </section>
 

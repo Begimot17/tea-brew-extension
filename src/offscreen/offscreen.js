@@ -79,6 +79,33 @@ async function sayClip({ clip, volume = 0.9 }) {
   }
 }
 
+/**
+ * Синтез речи внутри документа — последняя попытка, если chrome.tts молчит.
+ * Возвращает false, если Web Speech API здесь недоступен или не отозвался.
+ */
+function speakHere({ text, volume = 0.9, rate = 1 }) {
+  return new Promise(resolve => {
+    if (typeof speechSynthesis === 'undefined') { resolve(false); return }
+    let answered = false
+    const done = ok => { if (!answered) { answered = true; resolve(ok) } }
+    try {
+      const u = new SpeechSynthesisUtterance(text)
+      u.lang = 'ru-RU'
+      u.volume = Math.min(1, Math.max(0, volume))
+      u.rate = rate
+      u.onstart = () => done(true)
+      u.onend = () => done(true)
+      u.onerror = e => { report(`синтез в документе: ${e?.error || 'ошибка'}`); done(false) }
+      speechSynthesis.cancel()
+      speechSynthesis.speak(u)
+    } catch (err) {
+      report(`синтез в документе недоступен: ${err?.message || err}`)
+      done(false)
+    }
+    setTimeout(() => done(false), 1500)
+  })
+}
+
 // ── планирование ─────────────────────────────────────────────────────────────
 
 function clear() {
@@ -120,6 +147,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   else if (msg.type === 'cancel') { clear(); stopAnchor(); sendResponse(true) }
   else if (msg.type === 'gong') { playGong(msg.volume); sendResponse(true) }
   else if (msg.type === 'clip') { sayClip(msg).then(sendResponse); return true }
+  else if (msg.type === 'speak') { speakHere(msg).then(sendResponse); return true }
   else if (msg.type === 'ping') sendResponse(true)
   else sendResponse(false)
 })

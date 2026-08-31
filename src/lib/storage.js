@@ -1,6 +1,6 @@
 /** Обёртки над chrome.storage.local: настройки, сессия, избранное. */
 
-import { PACK_CLASSIC } from './phrases.js'
+import { PACK_CLASSIC, PACK_NEUTRAL, PACK_SUNBOY } from './phrases.js'
 
 export const DEFAULT_SETTINGS = {
   pack: PACK_CLASSIC,      // classic | neutral | sunboy
@@ -10,6 +10,9 @@ export const DEFAULT_SETTINGS = {
   volumeLevel: 0.6,        // громкость 0..1
   notifications: true,     // системные уведомления
   speech: true,            // проговаривать фразу голосом
+  // Голос выбирается отдельно для каждого набора фраз: у Пророка есть
+  // собственный записанный голос, а классику приятнее слушать нейросинтезом.
+  voices: { [PACK_CLASSIC]: 'dmitry', [PACK_NEUTRAL]: 'svetlana', [PACK_SUNBOY]: 'sunboy' },
   speechVolume: 0.9,       // громкость озвучки 0..1
   speechRate: 1,           // скорость речи синтеза
   defaultVolume: 100,      // объём посуды по умолчанию, мл
@@ -22,7 +25,15 @@ const GEAR_KEY = 'gear'   // последняя посуда/навеска по
 
 export async function getSettings() {
   const raw = await chrome.storage.local.get(SETTINGS_KEY)
-  return { ...DEFAULT_SETTINGS, ...(raw[SETTINGS_KEY] || {}) }
+  const saved = raw[SETTINGS_KEY] || {}
+  // voices — вложенный объект, его нужно слить отдельно, иначе сохранение
+  // одного пака стёрло бы выбор для остальных.
+  return { ...DEFAULT_SETTINGS, ...saved, voices: { ...DEFAULT_SETTINGS.voices, ...(saved.voices || {}) } }
+}
+
+/** Голос, которым озвучивается активный набор фраз. */
+export function voiceFor(settings) {
+  return settings.voices?.[settings.pack] || 'dmitry'
 }
 
 export async function setSettings(patch) {
