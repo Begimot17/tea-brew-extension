@@ -4,7 +4,7 @@
  * переходы считает движок.
  *
  * session = {
- *   teaKey, teaName, style, seed, grams, volume,
+ *   teaKey, teaName, style, mode, seed, grams, volume,
  *   steps: [{ label, sec, rinse }],
  *   idx,                    // индекс текущего шага
  *   status: 'running' | 'await' | 'paused' | 'done',
@@ -14,12 +14,13 @@
  * }
  */
 
-import { buildSteps } from './brew.js'
+import { buildSteps, brewMode } from './brew.js'
 
 export function createSession(tea, grams, volume, seed) {
   const steps = buildSteps(tea, grams, volume)
   return {
     teaKey: tea.key, teaName: tea.name, style: tea.style || null,
+    mode: brewMode(tea, grams, volume),
     seed, grams, volume, steps,
     idx: 0, status: 'running',
     endTime: Date.now() + steps[0].sec * 1000,

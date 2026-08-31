@@ -5,8 +5,8 @@
  */
 
 import {
-  VOLUMES, buildSteps, recommendedGrams, steepCount, totalSec,
-  fmt, plural, steepWord, timeFit, steepHint, teaGroup,
+  VOLUMES, buildSteps, recommendedGrams, totalSec, modeInfo,
+  fmt, plural, timeFit, steepHint, teaGroup,
 } from '../lib/brew.js'
 import { teaPhrase } from '../lib/phrases.js'
 import { getSettings, getFavorites, toggleFavorite, getGear, setGear, getSession } from '../lib/storage.js'
@@ -121,13 +121,18 @@ function renderGear() {
     : `${tea.grams_per_100ml} г / 100 мл — эталон сорта`
   $('grams-reset').hidden = !gramsTouched
 
-  const n = steepCount(tea, grams, volume)
   const steps = buildSteps(tea, grams, volume)
+  const info = modeInfo(tea, grams, volume)
+  const pours = steps.filter(s => !s.rinse)
+  const rinses = steps.length - pours.length
+  const w = plural(pours.length, info.word)
   const total = totalSec(steps)
-  const w = plural(n, steepWord(tea.style))
-  const rinses = tea.rinses ? ` · ${tea.rinses} ${plural(tea.rinses, ['промывка', 'промывки', 'промывок'])}` : ''
-  $('preview').textContent = `${n} ${w} · ~${Math.round(total / 60)} мин${rinses}`
-  $('temp').textContent = `${tea.temp} °C · ${tea.tips || ''}`
+  const rinseNote = rinses ? ` · ${rinses} ${plural(rinses, ['промывка', 'промывки', 'промывок'])}` : ''
+
+  $('preview').textContent = `${pours.length} ${w} · ~${Math.max(1, Math.round(total / 60))} мин${rinseNote}`
+  // Соотношение «1:20» — то, чем заварку меряют на самом деле.
+  $('mode').textContent = `${info.name} · 1:${info.ratio} — ${info.hint}`
+  $('temp').textContent = `${tea.temp} °C · ${pours.map(s => fmt(s.sec)).join(' → ')}`
 }
 
 function setGrams(v) {
@@ -157,12 +162,15 @@ function renderBrew() {
     ? 'Сессия завершена'
     : waiting
       ? `${step.label} готов — снимай`
-      : `${step.label} · ${steepHint(tea || teaFromSession(), session.idx)}`
+      : `${step.label} · ${steepHint(tea || teaFromSession(), session.idx, session.mode)}`
 
   if (session.status === 'done') {
     const mins = Math.round((Date.now() - session.startedAt) / 60000)
     $('clock').textContent = '🍵'
-    $('phrase').textContent = `${session.doneSteeps} ${plural(session.doneSteeps, steepWord(session.style))} · ${mins} мин`
+    const word = session.mode === 'gongfu'
+      ? ['пролив', 'пролива', 'проливов']
+      : ['настой', 'настоя', 'настоев']
+    $('phrase').textContent = `${session.doneSteeps} ${plural(session.doneSteeps, word)} · ${mins} мин`
   } else if (waiting) {
     // Таймер отработал и стоит: следующий пролив запускает пользователь.
     const nextStep = session.steps[session.idx + 1]

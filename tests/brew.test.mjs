@@ -3,61 +3,80 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import {
-  buildSteps, steepCount, strengthRatio, recommendedGrams, totalSec, plural,
+  buildSteps, steepCount, strengthRatio, waterRatio, recommendedGrams,
+  brewMode, modeInfo, totalSec, plural, MODE_THRESHOLD,
 } from '../src/lib/brew.js'
 
 const catalog = JSON.parse(readFileSync(
   fileURLToPath(new URL('../src/data/tea.json', import.meta.url)), 'utf8'))
 const tea = k => catalog.find(t => t.key === k)
+const pours = (t, g, v) => buildSteps(t, g, v).filter(s => !s.rinse)
 
 test('каталог на месте', () => {
   assert.ok(catalog.length >= 18)
   assert.ok(tea('shou_puer'))
 })
 
+// ── режимы ───────────────────────────────────────────────────────────────────
+
+test('режим определяется соотношением воды к листу', () => {
+  const t = tea('shou_puer')
+  assert.equal(brewMode(t, 7, 100), 'gongfu')      // 1:14 — классическое гунфу
+  assert.equal(brewMode(t, 5, 100), 'gongfu')      // 1:20
+  assert.equal(brewMode(t, 8, 500), 'western')     // 1:63 — чайник
+  assert.equal(brewMode(t, 2.5, 250), 'western')   // 1:100 — кружка
+})
+
+test('пакетик и травы гунфу не заваривают ни при каком соотношении', () => {
+  for (const key of ['tea_bag', 'chamomile', 'black_tea']) {
+    assert.equal(brewMode(tea(key), 10, 100), 'western')
+    assert.equal(brewMode(tea(key), 1, 500), 'western')
+  }
+})
+
+test('соотношение считается как мл на грамм', () => {
+  assert.equal(Math.round(waterRatio(8, 500)), 63)
+  assert.equal(Math.round(waterRatio(7, 100)), 14)
+})
+
+// ── случай, с которого начался пересчёт ──────────────────────────────────────
+
+test('8 г пуэра на 500 мл — это чайник: три настоя по минутам, а не десяток проливов', () => {
+  const t = tea('shou_puer')
+  const p = pours(t, 8, 500)
+  assert.equal(brewMode(t, 8, 500), 'western')
+  assert.ok(p.length <= 3, `настоев ${p.length}, ожидали не больше трёх`)
+  // Первый настой — минуты, а не секунды, но и не десять минут.
+  assert.ok(p[0].sec >= 120 && p[0].sec <= 300, `первый настой ${p[0].sec} с`)
+  assert.ok(p.every(s => s.sec <= 360))
+})
+
+// ── гунфу ────────────────────────────────────────────────────────────────────
+
 test('эталонная навеска воспроизводит каталог один-в-один', () => {
   const t = tea('shou_puer')
   const g = recommendedGrams(t, 100)
   assert.equal(strengthRatio(t, g, 100), 1)
-  assert.equal(steepCount(t, g, 100), t.steeps_sec.length)
-  const steeps = buildSteps(t, g, 100).filter(s => !s.rinse).map(s => s.sec)
-  assert.deepEqual(steeps, t.steeps_sec)
+  assert.equal(brewMode(t, g, 100), 'gongfu')
+  assert.deepEqual(pours(t, g, 100).map(s => s.sec), t.steeps_sec)
 })
 
-test('крепость зависит от отношения г/мл, а не от абсолютных чисел', () => {
+test('в гунфу плотнее навеска — больше проливов и они короче', () => {
   const t = tea('shou_puer')
-  assert.equal(strengthRatio(t, 7, 200), strengthRatio(t, 3.5, 100))
-  assert.equal(steepCount(t, 14, 200), steepCount(t, 7, 100))
-})
-
-test('больше листа — проливов больше и они короче', () => {
-  const t = tea('shou_puer')
-  const base = buildSteps(t, 7, 100).filter(s => !s.rinse)
-  const strong = buildSteps(t, 14, 100).filter(s => !s.rinse)
-  const weak = buildSteps(t, 3.5, 100).filter(s => !s.rinse)
+  const base = pours(t, 7, 100)
+  const strong = pours(t, 12, 100)
   assert.ok(strong.length > base.length)
-  assert.ok(weak.length < base.length)
   assert.ok(strong[0].sec < base[0].sec)
-  assert.ok(weak[0].sec > base[0].sec)
 })
 
-test('число проливов монотонно по навеске и не выходит за границы', () => {
-  const t = tea('sheng_puer')
-  const baseN = t.steeps_sec.length
-  let prev = 0
-  for (const g of [1, 2, 3, 4, 6, 8, 10, 14, 20, 30]) {
-    const n = steepCount(t, g, 100)
-    assert.ok(n >= prev, `n не должно падать при росте навески (${g} г)`)
-    assert.ok(n >= 3 && n <= baseN + 4, `n=${n} вне границ`)
-    prev = n
+test('гунфу-пролив не превращается в многоминутный настой', () => {
+  for (const t of catalog.filter(x => x.style !== 'western')) {
+    for (const g of [4, 5, 6, 7, 10, 14]) {
+      const p = pours(t, g, 100)
+      assert.ok(p.every(s => s.sec <= 240), `${t.key} ${g}г: ${p.map(s => s.sec)}`)
+      assert.ok(p.length >= 4, `${t.key} ${g}г: проливов ${p.length}`)
+    }
   }
-})
-
-test('западная заварка число настоев не масштабирует', () => {
-  const t = tea('tea_bag')
-  const baseN = t.steeps_sec.length
-  assert.equal(steepCount(t, 1, 250), baseN)
-  assert.equal(steepCount(t, 20, 250), baseN)
 })
 
 test('промывки идут первыми и в нужном количестве', () => {
@@ -65,23 +84,85 @@ test('промывки идут первыми и в нужном количес
   const steps = buildSteps(t, 7, 100)
   assert.equal(steps.filter(s => s.rinse).length, t.rinses)
   assert.ok(steps.slice(0, t.rinses).every(s => s.rinse))
-  assert.ok(steps.every(s => s.sec >= 3))
 })
 
-test('общая длительность — сумма шагов, без пауз между ними', () => {
+// ── западная заварка ─────────────────────────────────────────────────────────
+
+test('стандартная кружка 2.5 г на 250 мл даёт настои в 2–6 минут', () => {
+  for (const key of ['shou_puer', 'green', 'dianhong', 'tieguanyin', 'white']) {
+    const p = pours(tea(key), 2.5, 250)
+    assert.ok(p.length >= 1 && p.length <= 3, `${key}: ${p.length} настоев`)
+    assert.ok(p[0].sec >= 120 && p[0].sec <= 360, `${key}: первый настой ${p[0].sec} с`)
+  }
+})
+
+test('зелёный настаивают меньше пуэра при одинаковой посуде', () => {
+  assert.ok(pours(tea('green'), 2.5, 250)[0].sec < pours(tea('shou_puer'), 2.5, 250)[0].sec)
+})
+
+test('меньше листа на ту же воду — настой длиннее', () => {
   const t = tea('shou_puer')
-  const steps = buildSteps(t, 7, 100)
-  assert.equal(totalSec(steps), steps.reduce((s, x) => s + x.sec, 0))
+  assert.ok(pours(t, 2, 500)[0].sec > pours(t, 5, 500)[0].sec)
 })
 
-test('все сорта каталога считаются без сбоев', () => {
+test('каждый следующий настой дольше предыдущего', () => {
+  const p = pours(tea('shou_puer'), 8, 500)
+  for (let i = 1; i < p.length; i++) assert.ok(p[i].sec > p[i - 1].sec)
+})
+
+test('прессованный чай промывают и в чайнике, лист без прессовки — нет', () => {
+  assert.ok(buildSteps(tea('shou_puer'), 8, 500).some(s => s.rinse))
+  assert.ok(!buildSteps(tea('green'), 2.5, 250).some(s => s.rinse))
+})
+
+test('бытовые сорта берут тайминги прямо из каталога', () => {
+  const t = tea('chamomile')
+  assert.deepEqual(pours(t, 2, 250).map(s => s.sec), t.steeps_sec)
+})
+
+// ── общее ────────────────────────────────────────────────────────────────────
+
+test('на границе режимов расчёт не ломается и не даёт абсурда', () => {
+  const t = tea('shou_puer')
+  for (const ratio of [MODE_THRESHOLD - 1, MODE_THRESHOLD, MODE_THRESHOLD + 1]) {
+    const p = pours(t, 100 / ratio, 100)
+    assert.ok(p.length >= 1)
+    assert.ok(p.every(s => s.sec >= 3 && s.sec <= 480))
+  }
+})
+
+test('все сорта каталога считаются без сбоев на любой посуде', () => {
   for (const t of catalog) {
     for (const v of [60, 100, 250, 500]) {
-      const steps = buildSteps(t, recommendedGrams(t, v), v)
-      assert.ok(steps.length > 0, t.key)
-      assert.ok(steps.every(s => Number.isFinite(s.sec) && s.sec >= 3), t.key)
+      for (const g of [1, 2, 5, recommendedGrams(t, v)]) {
+        const steps = buildSteps(t, g, v)
+        assert.ok(steps.length > 0, `${t.key} ${g}/${v}`)
+        assert.ok(steps.every(s => Number.isFinite(s.sec) && s.sec >= 3 && s.sec <= 600),
+          `${t.key} ${g}г/${v}мл: ${steps.map(s => s.sec)}`)
+      }
     }
   }
+})
+
+test('modeInfo даёт название режима, соотношение и слово для счёта', () => {
+  const g = modeInfo(tea('shou_puer'), 7, 100)
+  assert.equal(g.mode, 'gongfu')
+  assert.equal(g.ratio, 14)
+  assert.equal(g.word[2], 'проливов')
+  const w = modeInfo(tea('shou_puer'), 8, 500)
+  assert.equal(w.mode, 'western')
+  assert.equal(w.word[2], 'настоев')
+})
+
+test('steepCount совпадает с числом непромывочных шагов', () => {
+  const t = tea('shou_puer')
+  assert.equal(steepCount(t, 7, 100), pours(t, 7, 100).length)
+  assert.equal(steepCount(t, 8, 500), pours(t, 8, 500).length)
+})
+
+test('общая длительность — сумма шагов', () => {
+  const steps = buildSteps(tea('shou_puer'), 7, 100)
+  assert.equal(totalSec(steps), steps.reduce((s, x) => s + x.sec, 0))
 })
 
 test('склонение проливов', () => {
