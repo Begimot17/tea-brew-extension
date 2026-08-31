@@ -230,15 +230,37 @@ async function nudge() {
   }
 }
 
+let poll = null
+
+/**
+ * Пока открыт экран заварки, перечитываем сессию из хранилища.
+ *
+ * Событий storage.onChanged в теории достаточно, но попап открывается и
+ * закрывается посреди чужих операций, и пропущенное событие оставляло экран с
+ * устаревшим состоянием: шаг давно кончился, а кнопка всё предлагала «Пауза».
+ * Полкилобайта раз в полсекунды — честная цена за то, что кнопка всегда
+ * означает то, что на ней написано.
+ */
 function loop() {
   cancelAnimationFrame(raf)
-  const step = () => {
+  clearInterval(poll)
+
+  const draw = () => {
     renderBrew()
     const live = session && session.status === 'running'
     if (live && session.endTime - Date.now() <= 0) nudge()
-    if (live) raf = requestAnimationFrame(step)
+    if (live) raf = requestAnimationFrame(draw)
   }
-  step()
+  draw()
+
+  poll = setInterval(async () => {
+    const fresh = await getSession()
+    if (!fresh) { clearInterval(poll); return }
+    if (fresh.status !== session?.status || fresh.idx !== session?.idx) {
+      session = fresh
+      draw()
+    }
+  }, 500)
 }
 
 async function send(msg) {
@@ -281,9 +303,17 @@ function wire() {
   })
 
   $('toggle').addEventListener('click', async () => {
+    // Состояние перечитываем перед действием: шаг мог закончиться ровно сейчас,
+    // и «Пауза» на экране уже означает «Старт».
+    session = (await getSession()) || session
     if (!session) return
     if (session.status === 'done') { await send({ type: 'start', tea, grams, volume }); return }
     if (session.status === 'await') { await send({ type: 'start-step' }); return }
+    if (session.status === 'running' && session.endTime <= Date.now()) {
+      await send({ type: 'sync' })
+      await send({ type: 'start-step' })
+      return
+    }
     await send({ type: session.status === 'paused' ? 'resume' : 'pause' })
   })
   $('next').addEventListener('click', () => send({ type: 'skip' }))

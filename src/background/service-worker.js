@@ -54,7 +54,15 @@ async function closeOffscreen() {
  * сообщение тогда уходит в пустоту. Поэтому шлём с повторами; вдобавок сам
  * документ, загрузившись, просит перепланировать (см. 'offscreen-ready').
  */
-async function toOffscreen(msg, attempts = 4) {
+/**
+ * Отправить сообщение offscreen-документу.
+ *
+ * Повторы нужны только для расписания: документ мог ещё не подписаться на
+ * сообщения, и первое уходит в пустоту. А вот звук повторять нельзя — ошибка
+ * при отправке не значит, что сообщение не дошло: порт закрывается и уже после
+ * доставки, и тогда повтор проигрывал фразу второй раз.
+ */
+async function toOffscreen(msg, attempts = 1) {
   try {
     await ensureOffscreen()
   } catch (err) {
@@ -95,47 +103,55 @@ async function announce(session, settings, events) {
         priority: 2,
       })
     }
-    if (settings.sound) await toOffscreen({ type: 'gong', volume: settings.volumeLevel })
-    if (settings.speech) await say(phrase, settings, settings.sound ? 1400 : 0)
+    const plain = settings.name
+      ? teaPhrase(ev.type, ev.stepIndex, session.seed, undefined, {
+        pack: settings.pack, teaKey: session.teaKey,
+      })
+      : ''
+    const token = `${session.seed}:${ev.stepIndex}`
+    if (settings.sound) await toOffscreen({ type: 'gong', volume: settings.volumeLevel, token })
+    if (settings.speech) await say(phrase, settings, settings.sound ? 1400 : 0, token, plain)
   }
 }
 
 /**
- * Озвучить фразу. Путей три, пробуем по очереди, пока какой-нибудь не сработает:
+ * Озвучить фразу.
  *
- *   1. записанный клип (есть только у Пророка Санбоя) — играет offscreen;
- *   2. chrome.tts — системный синтез, доступный прямо из воркера;
- *   3. speechSynthesis внутри offscreen-документа — на случай, если chrome.tts
- *      в этой системе не отзывается (например, нет ни одного голоса).
+ * Все фразы записаны и лежат в расширении, поэтому обычный путь ровно один —
+ * проиграть клип. Исключение: фраза с обращением по имени, её заранее не
+ * запишешь; тогда звучит записанный безымянный вариант той же фразы.
  *
- * Возвращает, каким путём получилось, — настройки это показывают.
- * Гонг звучит около трёх секунд, поэтому фразу пускаем с задержкой.
+ * Системный синтез остаётся крайним случаем и запускается, только если клипа
+ * нет вовсе. Двух путей сразу быть не должно: раньше фраза с именем уходила и
+ * в chrome.tts, и в синтез фонового документа — и звучала дважды.
+ *
+ * Гонг длится около трёх секунд, поэтому фразу пускаем с задержкой.
  */
-async function say(phrase, settings, delay = 0) {
+async function say(phrase, settings, delay = 0, token = '', fallback = '') {
   if (delay) await new Promise(r => setTimeout(r, delay))
   if (!phrase) return null
 
   const voice = voiceFor(settings)
-  const clip = await clipUrl(phrase, voice)
-  if (clip && await toOffscreen({ type: 'clip', clip, volume: settings.speechVolume }) === true)
-    return voiceName(voice)
+  const clip = await clipUrl(phrase, voice) || await clipUrl(fallback, voice)
+  if (clip) {
+    const ok = await toOffscreen({ type: 'clip', clip, volume: settings.speechVolume, token })
+    if (ok === true) return voiceName(voice)
+  }
 
-  // Фразы с обращением по имени заранее не записать — их читает синтез.
-  if (await speak(phrase, settings)) return 'системный синтез'
-
-  const viaDoc = await toOffscreen({
-    type: 'speak', text: phrase, volume: settings.speechVolume, rate: settings.speechRate,
-  })
-  return viaDoc === true ? 'синтез в фоновом документе' : null
+  return await speak(phrase, settings) ? 'системный синтез' : null
 }
 
-/** Голос под язык фразы: без подходящего голоса синтез просто молчит. */
-async function pickVoice(lang = 'ru') {
+/**
+ * Голос под русский язык. Английский голос русскую фразу только изуродует,
+ * поэтому лучше промолчать — записанные клипы всё равно основной путь.
+ */
+async function pickVoice() {
   try {
     const voices = await chrome.tts.getVoices()
     if (!voices?.length) { lastAudioProblem = 'в системе не установлено ни одного голоса'; return null }
-    const exact = voices.find(v => (v.lang || '').toLowerCase().startsWith(lang))
-    return exact || voices[0]
+    const ru = voices.find(v => (v.lang || '').toLowerCase().startsWith('ru'))
+    if (!ru) lastAudioProblem = 'в системе нет русского голоса — эту фразу озвучить нечем'
+    return ru || null
   } catch (err) {
     lastAudioProblem = `chrome.tts недоступен: ${err?.message || err}`
     return null
@@ -144,7 +160,7 @@ async function pickVoice(lang = 'ru') {
 
 /** Системный синтез. Возвращает false, если сказать не вышло. */
 async function speak(text, settings) {
-  const voice = await pickVoice('ru')
+  const voice = await pickVoice()
   if (!voice) return false
   return new Promise(resolve => {
     let answered = false
@@ -155,7 +171,7 @@ async function speak(text, settings) {
         lang: voice.lang,
         rate: settings.speechRate,
         volume: settings.speechVolume,
-        enqueue: true,
+        enqueue: false,
         onEvent: e => {
           if (e.type === 'error') {
             lastAudioProblem = `синтез речи: ${e.errorMessage || 'ошибка'}`
@@ -169,7 +185,6 @@ async function speak(text, settings) {
       lastAudioProblem = `синтез речи недоступен: ${err?.message || err}`
       done(false)
     }
-    // Голос мог не прислать ни одного события — не ждём его вечно.
     setTimeout(() => done(false), 1500)
   })
 }
@@ -189,7 +204,7 @@ async function schedule(session, settings) {
     at: wake,
     ticks: settings.ticks,
     volume: settings.volumeLevel,
-  })
+  }, 4)
 }
 
 /**
@@ -310,7 +325,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       case 'test-voice': {
         lastAudioProblem = ''
         const cfg = await getSettings()
-        const via = await say(msg.text, cfg)
+        const via = await say(msg.text, cfg, 0, `test:${Date.now()}`)
         sendResponse({ ok: !!via, via, problem: lastAudioProblem })
         break
       }
