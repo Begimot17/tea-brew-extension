@@ -65,8 +65,10 @@ let clipEl = null
  * Возвращает false, если клипа нет или он не заиграл — тогда воркер читает
  * фразу синтезом.
  */
-async function sayClip({ clip, volume = 0.9 }) {
+async function sayClip({ clip, volume = 0.9, delay = 0 }) {
   if (!clip) return false
+  // Гонг звучит около трёх секунд — фразу пускаем следом, а не поверх него.
+  if (delay) await new Promise(r => setTimeout(r, delay))
   try {
     if (clipEl) { try { clipEl.pause() } catch { /* уже остановлен */ } }
     clipEl = new Audio(clip)
@@ -133,8 +135,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   else if (msg.type === 'gong') { if (once(`gong:${msg.token}`)) playGong(msg.volume); sendResponse(true) }
   else if (msg.type === 'clip') {
     if (!once(`clip:${msg.token}`)) { sendResponse(true); return }
-    sayClip(msg).then(sendResponse)
-    return true
+    // Отвечаем сразу: воркеру незачем ждать, пока фраза договорит.
+    sayClip(msg)
+    sendResponse(true)
   }
   else if (msg.type === 'ping') sendResponse(true)
   else sendResponse(false)

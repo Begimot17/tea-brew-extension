@@ -9,6 +9,7 @@ import {
   fmt, plural, timeFit, steepHint, teaGroup,
 } from '../lib/brew.js'
 import { teaPhrase } from '../lib/phrases.js'
+import { startStep } from '../lib/engine.js'
 import { getSettings, getFavorites, toggleFavorite, getGear, setGear, getSession } from '../lib/storage.js'
 
 const $ = id => document.getElementById(id)
@@ -256,15 +257,30 @@ function loop() {
   poll = setInterval(async () => {
     const fresh = await getSession()
     if (!fresh) { clearInterval(poll); return }
-    if (fresh.status !== session?.status || fresh.idx !== session?.idx) {
+    if (fresh.status !== session?.status
+      || fresh.idx !== session?.idx
+      || fresh.endTime !== session?.endTime) {
       session = fresh
       draw()
     }
   }, 500)
 }
 
+/**
+ * Отправить команду воркеру и показать актуальное состояние.
+ *
+ * Ответ воркера — не источник правды: он может не прийти вовсе (воркер как раз
+ * перезапускался), а раньше пустой ответ уводил попап обратно к списку чаёв
+ * прямо посреди заварки. Правда лежит в хранилище, туда и смотрим.
+ */
 async function send(msg) {
-  session = await chrome.runtime.sendMessage(msg)
+  try {
+    const reply = await chrome.runtime.sendMessage(msg)
+    if (reply?.error) console.error('[Чайная]', msg.type, reply.error)
+  } catch (err) {
+    console.error('[Чайная] воркер не ответил:', msg.type, err)
+  }
+  session = await getSession()
   if (!session) { show('pick'); return }
   show('brew')
   loop()
@@ -307,13 +323,25 @@ function wire() {
     // и «Пауза» на экране уже означает «Старт».
     session = (await getSession()) || session
     if (!session) return
+
     if (session.status === 'done') { await send({ type: 'start', tea, grams, volume }); return }
-    if (session.status === 'await') { await send({ type: 'start-step' }); return }
+
+    // Истёкший шаг закрываем сами, чтобы «Старт» сработал с первого нажатия.
     if (session.status === 'running' && session.endTime <= Date.now()) {
-      await send({ type: 'sync' })
+      await chrome.runtime.sendMessage({ type: 'sync' }).catch(() => {})
+      session = (await getSession()) || session
+    }
+
+    if (session.status === 'await') {
+      // Отсчёт показываем сразу, не дожидаясь воркера: ждать ответа ради
+      // запуска секундомера — значит терять эти самые секунды.
+      session = startStep(session)
+      show('brew')
+      loop()
       await send({ type: 'start-step' })
       return
     }
+
     await send({ type: session.status === 'paused' ? 'resume' : 'pause' })
   })
   $('next').addEventListener('click', () => send({ type: 'skip' }))

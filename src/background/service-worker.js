@@ -110,6 +110,8 @@ async function announce(session, settings, events) {
       : ''
     const token = `${session.seed}:${ev.stepIndex}`
     if (settings.sound) await toOffscreen({ type: 'gong', volume: settings.volumeLevel, token })
+    // Пауза после гонга — забота документа: воркер не должен ждать её сам,
+    // иначе нажатая в этот момент кнопка стоит в очереди вместе со звуком.
     if (settings.speech) await say(phrase, settings, settings.sound ? 1400 : 0, token, plain)
   }
 }
@@ -128,16 +130,16 @@ async function announce(session, settings, events) {
  * Гонг длится около трёх секунд, поэтому фразу пускаем с задержкой.
  */
 async function say(phrase, settings, delay = 0, token = '', fallback = '') {
-  if (delay) await new Promise(r => setTimeout(r, delay))
   if (!phrase) return null
 
   const voice = voiceFor(settings)
   const clip = await clipUrl(phrase, voice) || await clipUrl(fallback, voice)
   if (clip) {
-    const ok = await toOffscreen({ type: 'clip', clip, volume: settings.speechVolume, token })
+    const ok = await toOffscreen({ type: 'clip', clip, volume: settings.speechVolume, token, delay })
     if (ok === true) return voiceName(voice)
   }
 
+  if (delay) await new Promise(r => setTimeout(r, delay))
   return await speak(phrase, settings) ? 'системный синтез' : null
 }
 
@@ -226,7 +228,7 @@ function serial(fn) {
 function advance() {
   return serial(async () => {
     const session = await getSession()
-    if (!session) return null
+    if (!session) return { session: null, settings: null, events: [] }
     const settings = await getSettings()
     const { session: nextS, events } = tick(session, settings)
 
@@ -237,9 +239,11 @@ function advance() {
     await setSession(nextS)
     await schedule(nextS, settings)
 
-    // Ждём озвучку: состояние уже сохранено, гонки это не создаёт, зато
-    // воркер не уснёт на полуслове.
-    if (fresh) await announce(nextS, settings, events)
+    return { session: nextS, settings, events: fresh ? events : [] }
+  }).then(async ({ session: nextS, settings, events }) => {
+    // Озвучка идёт уже вне очереди: шаг помечен объявленным и сохранён, так
+    // что дубля не будет, зато следующая команда не ждёт конца фразы.
+    if (events.length) await announce(nextS, settings, events)
     return nextS
   })
 }
@@ -263,7 +267,21 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.target === 'offscreen') return   // не наше — адресовано документу
 
   ;(async () => {
-    switch (msg?.type) {
+    // Ответ обязателен всегда: пустой ответ попап не отличит от «сессии нет»,
+    // и упавший обработчик выглядел бы как молча закрывшаяся заварка.
+    try {
+      await handle(msg, sendResponse)
+    } catch (err) {
+      console.error('[Чайная] обработчик упал:', msg?.type, err)
+      sendResponse({ error: String(err?.message || err) })
+    }
+  })()
+
+  return true   // ответ асинхронный
+})
+
+async function handle(msg, sendResponse) {
+  switch (msg?.type) {
       case 'start': {
         sendResponse(await serial(async () => {
           const settings = await getSettings()
@@ -356,13 +374,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       case 'sync':
         sendResponse(await advance())
         break
-      default:
-        sendResponse(null)
-    }
-  })()
-
-  return true   // ответ асинхронный
-})
+    default:
+      sendResponse(null)
+  }
+}
 
 // ── страховка на случай выгрузки воркера ─────────────────────────────────────
 
