@@ -139,7 +139,7 @@ src/
   data/voices-*.json       манифесты озвучки: фраза → файл
   assets/voices/<голос>/   сами записи (dmitry, svetlana, sunboy)
   assets/sounds/           гонг и тик обратного отсчёта
-tests/                     node --test
+tests/                     node --test, плюс e2e.mjs — живой Chrome
 scripts/bake_voices.py     запекание озвучки через edge-tts
 ```
 
@@ -161,7 +161,17 @@ offscreen-документ: он живёт, пока идёт воспроиз�
 node --test "tests/**/*.test.mjs"
 ```
 
-Кроме юнит-тестов расчёта и движка есть сценарные: `tests/worker.test.mjs`
+Живой прогон в настоящем Chrome (расширение загружается, кнопки жмутся,
+состояние читается из хранилища):
+
+```
+npm install --no-save playwright && npx playwright install chromium
+node tests/e2e.mjs
+```
+
+Он ловит то, чего не видит ни один мок: упавший при загрузке скрипт, сессию от
+прошлой версии расширения, дубль воспроизведения. Кроме него есть сценарные
+тесты на моке — `tests/worker.test.mjs`
 поднимает настоящий `service-worker.js` на моке Chrome-API
 (`tests/helpers/chrome-mock.mjs`) и проходит заварку шаг за шагом. Именно они
 ловят то, что не видно по отдельным функциям: что «Старт» отвечает попапу

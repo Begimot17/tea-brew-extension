@@ -42,9 +42,22 @@ export async function setSettings(patch) {
   return next
 }
 
+/**
+ * Версия формата сессии. Растёт, когда меняются поля или состояния: сессия от
+ * прошлой версии расширения переживает обновление и, если её не отбросить,
+ * ведёт себя загадочно — например, стоит в состоянии, которого больше нет.
+ */
+export const SESSION_VERSION = 2
+
 export async function getSession() {
   const raw = await chrome.storage.local.get(SESSION_KEY)
-  return raw[SESSION_KEY] || null
+  const session = raw[SESSION_KEY] || null
+  if (!session) return null
+  if (session.v !== SESSION_VERSION || !Array.isArray(session.steps)) {
+    await chrome.storage.local.remove(SESSION_KEY)
+    return null
+  }
+  return session
 }
 
 export async function setSession(session) {

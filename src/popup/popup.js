@@ -155,7 +155,9 @@ function teaFromSession() {
 
 function renderBrew() {
   if (!session) return
-  const step = session.steps[session.idx]
+  const step = session.steps?.[session.idx]
+  // Шага нет — сессия битая или не той версии; на неё нечего смотреть.
+  if (!step) { session = null; show('pick'); return }
   $('brew-name').textContent = session.teaName
 
   const waiting = session.status === 'await'
@@ -354,10 +356,13 @@ function wire() {
   })
 
   // Фон мог продвинуть сессию, пока попап был закрыт или пока идёт шаг.
-  chrome.storage.onChanged.addListener((changes, area) => {
+  // Значение из события берём не напрямую: там может лежать сессия от прошлой
+  // версии расширения, а отбрасывает такие только getSession().
+  chrome.storage.onChanged.addListener(async (changes, area) => {
     if (area !== 'local' || !changes.session) return
-    session = changes.session.newValue || null
+    session = await getSession()
     if (session) { show('brew'); loop() }
+    else show('pick')
   })
 }
 

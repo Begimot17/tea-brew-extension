@@ -9,6 +9,7 @@
  * расширение знать не может, поэтому и не угадывает.
  *
  * session = {
+ *   v,                      // версия формата, см. storage.SESSION_VERSION
  *   teaKey, teaName, style, mode, seed, grams, volume,
  *   steps: [{ label, sec, rinse }],
  *   idx,                    // шаг, который идёт или ждёт запуска
@@ -20,9 +21,11 @@
  */
 
 import { buildSteps, brewMode } from './brew.js'
+import { SESSION_VERSION } from './storage.js'
 
 export function createSession(tea, grams, volume, seed) {
   return {
+    v: SESSION_VERSION,
     teaKey: tea.key, teaName: tea.name, style: tea.style || null,
     mode: brewMode(tea, grams, volume),
     seed, grams, volume, steps: buildSteps(tea, grams, volume),
