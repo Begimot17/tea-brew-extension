@@ -3,117 +3,80 @@
  *
  * Зачем он вообще: сервис-воркер MV3 выгружают через ~30 секунд простоя, а
  * chrome.alarms будит не чаще раза в минуту — для проливов по 8 секунд это не
- * годится. Документ живёт, пока идёт воспроизведение звука, поэтому во время
- * сессии он держит почти беззвучный тон-«якорь» и тикает обычным setTimeout.
+ * годится. Документ живёт, пока идёт воспроизведение звука, и тикает обычным
+ * setTimeout.
+ *
+ * Звук — готовые файлы через <audio>, а не синтез на WebAudio: в
+ * offscreen-документе нет и не может быть пользовательского жеста, поэтому
+ * AudioContext остаётся приостановленным и не звучит вовсе. У <audio> в
+ * документе с reason AUDIO_PLAYBACK такой проблемы нет.
  */
 
-let timer = null       // таймаут до конца фазы
-let beat = null        // посекундный интервал: бейдж + тики
+let timer = null       // таймаут до конца шага
+let beat = null        // посекундный интервал: бейдж и тики
 let endAt = 0
 let ticksOn = false
 let vol = 0.6
 
-// ── WebAudio ─────────────────────────────────────────────────────────────────
+const GONG = chrome.runtime.getURL('src/assets/sounds/gong.wav')
+const TICK = chrome.runtime.getURL('src/assets/sounds/tick.wav')
 
-let ctx = null
-let anchor = null      // тихий тон, удерживающий документ живым
+// ── звук ─────────────────────────────────────────────────────────────────────
 
-function audio() {
-  if (!ctx) ctx = new AudioContext()
-  if (ctx.state === 'suspended') ctx.resume()
-  return ctx
+/** Сообщить воркеру о проблеме — он покажет её в настройках. */
+function report(message) {
+  chrome.runtime.sendMessage({ type: 'audio-problem', message }).catch(() => {})
 }
 
+// Тихий зациклённый гонг держит документ живым: Chrome не выгружает
+// offscreen-документ, пока тот действительно что-то воспроизводит.
+const anchor = new Audio(GONG)
+anchor.loop = true
+anchor.volume = 0.0001
+
 function startAnchor() {
-  if (anchor) return
-  const c = audio()
-  const o = c.createOscillator()
-  const g = c.createGain()
-  o.type = 'sine'
-  o.frequency.value = 40
-  g.gain.value = 0.0001          // неслышно, но считается воспроизведением
-  o.connect(g); g.connect(c.destination)
-  o.start()
-  anchor = { o, g }
+  anchor.play().catch(() => { /* не критично: есть аларм и попап */ })
 }
 
 function stopAnchor() {
-  if (!anchor) return
-  try { anchor.o.stop() } catch { /* уже остановлен */ }
-  anchor = null
+  try { anchor.pause() } catch { /* уже остановлен */ }
 }
 
-/** Мягкий многослойный гонг — конец шага. */
-function playGong(volume = 0.6) {
-  const c = audio()
-  const now = c.currentTime
-  const master = c.createGain()
-  master.gain.setValueAtTime(0.0001, now)
-  master.gain.exponentialRampToValueAtTime(Math.max(0.01, volume), now + 0.02)
-  master.gain.exponentialRampToValueAtTime(0.0001, now + 2.8)
-  master.connect(c.destination)
-  ;[196, 392, 523.25, 784].forEach((f, i) => {
-    const o = c.createOscillator(); const g = c.createGain()
-    o.type = 'sine'; o.frequency.setValueAtTime(f, now)
-    g.gain.setValueAtTime(1 / (i + 1.5), now)
-    o.connect(g); g.connect(master)
-    o.start(now); o.stop(now + 2.8)
-  })
+function play(src, volume) {
+  try {
+    const el = new Audio(src)
+    el.volume = Math.min(1, Math.max(0, volume))
+    return el.play().catch(err => report(`звук не проигрался: ${err?.message || err}`))
+  } catch (err) {
+    report(`звук не создался: ${err?.message || err}`)
+  }
 }
 
-/** Короткий тик — обратный отсчёт 3-2-1. */
-function playTick(volume = 0.6) {
-  const c = audio()
-  const now = c.currentTime
-  const o = c.createOscillator(); const g = c.createGain()
-  o.type = 'triangle'; o.frequency.setValueAtTime(880, now)
-  g.gain.setValueAtTime(0.0001, now)
-  g.gain.exponentialRampToValueAtTime(Math.max(0.01, volume * 0.5), now + 0.01)
-  g.gain.exponentialRampToValueAtTime(0.0001, now + 0.12)
-  o.connect(g); g.connect(c.destination)
-  o.start(now); o.stop(now + 0.13)
-}
+const playGong = (volume = vol) => play(GONG, volume)
+const playTick = (volume = vol) => play(TICK, volume * 0.5)
 
 // ── озвучка ──────────────────────────────────────────────────────────────────
 
 let clipEl = null
 
 /**
- * Сказать фразу: сначала записанный клип, иначе системный синтез.
- * Если клип есть, но не проигрался (битый файл, политика автоплея),
- * фраза не теряется — её дочитает синтез.
+ * Записанный клип фразы. Синтез речи живёт в воркере (chrome.tts): в
+ * offscreen-документе Web Speech API молчит.
+ * Возвращает false, если клипа нет или он не заиграл — тогда воркер читает
+ * фразу синтезом.
  */
-function say({ text, clip, volume = 0.9, rate = 1 }) {
-  if (!text) return
-  if (clip) {
-    try {
-      if (clipEl) { try { clipEl.pause() } catch { /* уже остановлен */ } }
-      clipEl = new Audio(clip)
-      clipEl.volume = Math.min(1, Math.max(0, volume))
-      const p = clipEl.play()
-      if (p?.catch) p.catch(() => speak(text, volume, rate))
-      return
-    } catch { /* падаем в синтез */ }
-  }
-  speak(text, volume, rate)
-}
-
-/** Гонг, следом фраза — чтобы не звучали друг поверх друга. */
-function announce({ gong, volume, text, clip, speechVolume = 0.9, rate = 1 }) {
-  if (gong) playGong(volume ?? vol)
-  if (!text) return
-  setTimeout(() => say({ text, clip, volume: speechVolume, rate }), gong ? 1200 : 0)
-}
-
-function speak(text, volume, rate) {
+async function sayClip({ clip, volume = 0.9 }) {
+  if (!clip) return false
   try {
-    const u = new SpeechSynthesisUtterance(text)
-    u.lang = 'ru-RU'
-    u.volume = Math.min(1, Math.max(0, volume))
-    u.rate = rate
-    speechSynthesis.cancel()
-    speechSynthesis.speak(u)
-  } catch { /* синтез недоступен — остаётся уведомление и гонг */ }
+    if (clipEl) { try { clipEl.pause() } catch { /* уже остановлен */ } }
+    clipEl = new Audio(clip)
+    clipEl.volume = Math.min(1, Math.max(0, volume))
+    await clipEl.play()
+    return true
+  } catch (err) {
+    report(`клип не проигрался: ${err?.message || err}`)
+    return false
+  }
 }
 
 // ── планирование ─────────────────────────────────────────────────────────────
@@ -135,8 +98,7 @@ function schedule(at, ticks, volume) {
   vol = volume ?? vol
   startAnchor()
 
-  const delay = Math.max(0, endAt - Date.now())
-  timer = setTimeout(fire, delay)
+  timer = setTimeout(fire, Math.max(0, endAt - Date.now()))
 
   let lastTick = -1
   beat = setInterval(() => {
@@ -146,16 +108,20 @@ function schedule(at, ticks, volume) {
       lastTick = left
       playTick(vol)
     }
-    // setTimeout в фоновой вкладке могут придушить — подстраховываемся.
+    // setTimeout в фоне могут придушить — подстраховываемся.
     if (left <= 0) fire()
   }, 1000)
 }
 
-chrome.runtime.onMessage.addListener((msg) => {
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.target !== 'offscreen') return
-  if (msg.type === 'schedule') schedule(msg.at, msg.ticks, msg.volume)
-  else if (msg.type === 'cancel') { clear(); stopAnchor() }
-  else if (msg.type === 'announce') announce(msg)
+
+  if (msg.type === 'schedule') { schedule(msg.at, msg.ticks, msg.volume); sendResponse(true) }
+  else if (msg.type === 'cancel') { clear(); stopAnchor(); sendResponse(true) }
+  else if (msg.type === 'gong') { playGong(msg.volume); sendResponse(true) }
+  else if (msg.type === 'clip') { sayClip(msg).then(sendResponse); return true }
+  else if (msg.type === 'ping') sendResponse(true)
+  else sendResponse(false)
 })
 
 // Просим воркер вернуть отсчёт: документ мог быть создан только что или

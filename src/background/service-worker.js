@@ -35,8 +35,12 @@ async function ensureOffscreen() {
   creating = chrome.offscreen.createDocument({
     url: OFFSCREEN_PATH,
     reasons: ['AUDIO_PLAYBACK'],
-    justification: 'Точный отсчёт шагов заварки и звуковой сигнал в конце пролива.',
-  }).catch(() => {}).finally(() => { creating = null })
+    justification: 'Отсчёт шагов заварки, гонг и озвучка фразы в конце пролива.',
+  }).catch(err => {
+    // «Only a single offscreen document» — гонка с параллельным созданием,
+    // документ уже есть и всё в порядке. Остальное стоит показать.
+    if (!String(err?.message || err).includes('single offscreen')) throw err
+  }).finally(() => { creating = null })
   return creating
 }
 
@@ -51,17 +55,25 @@ async function closeOffscreen() {
  * документ, загрузившись, просит перепланировать (см. 'offscreen-ready').
  */
 async function toOffscreen(msg, attempts = 4) {
-  await ensureOffscreen()
+  try {
+    await ensureOffscreen()
+  } catch (err) {
+    lastAudioProblem = `offscreen-документ не создался: ${err?.message || err}`
+    return false
+  }
   for (let i = 0; i < attempts; i++) {
     try {
-      await chrome.runtime.sendMessage({ target: 'offscreen', ...msg })
-      return true
-    } catch {
+      return await chrome.runtime.sendMessage({ target: 'offscreen', ...msg })
+    } catch (err) {
+      if (i === attempts - 1) lastAudioProblem = `offscreen не отвечает: ${err?.message || err}`
       await new Promise(r => setTimeout(r, 60 * (i + 1)))
     }
   }
   return false
 }
+
+/** Последняя проблема со звуком — показывается в настройках по кнопке проверки. */
+let lastAudioProblem = ''
 
 // ── уведомления и звук ───────────────────────────────────────────────────────
 
@@ -83,17 +95,37 @@ async function announce(session, settings, events) {
         priority: 2,
       })
     }
-    // Гонг и фраза уходят одним сообщением: развести их по времени —
-    // забота offscreen-документа, воркер к тому моменту может быть выгружен.
-    await toOffscreen({
-      type: 'announce',
-      gong: settings.sound,
-      volume: settings.volumeLevel,
-      text: settings.speech ? phrase : '',
-      clip: settings.speech ? await clipUrl(phrase, settings.pack) : null,
-      speechVolume: settings.speechVolume,
+    if (settings.sound) await toOffscreen({ type: 'gong', volume: settings.volumeLevel })
+    if (settings.speech) await say(phrase, settings, settings.sound ? 1400 : 0)
+  }
+}
+
+/**
+ * Озвучить фразу: записанным клипом, если он есть, иначе системным синтезом.
+ *
+ * Синтез зовём через chrome.tts, а не Web Speech API: в offscreen-документе
+ * speechSynthesis молчит, а вкладки у расширения нет. Гонг звучит около трёх
+ * секунд, поэтому фразу пускаем с задержкой, чтобы не накладывались.
+ */
+async function say(phrase, settings, delay = 0) {
+  if (delay) await new Promise(r => setTimeout(r, delay))
+  const clip = await clipUrl(phrase, settings.pack)
+  if (clip && await toOffscreen({ type: 'clip', clip, volume: settings.speechVolume }) === true) return
+  speak(phrase, settings)
+}
+
+/** Системный синтез речи. */
+function speak(text, settings) {
+  try {
+    chrome.tts.speak(text, {
+      lang: 'ru-RU',
       rate: settings.speechRate,
+      volume: settings.speechVolume,
+      enqueue: true,
+      onEvent: e => { if (e.type === 'error') lastAudioProblem = `синтез речи: ${e.errorMessage || 'ошибка'}` },
     })
+  } catch (err) {
+    lastAudioProblem = `синтез речи недоступен: ${err?.message || err}`
   }
 }
 
@@ -163,6 +195,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse(null)
         break
       }
+      case 'audio-problem':
+        lastAudioProblem = msg.message || ''
+        sendResponse(null)
+        break
       case 'beat':
         paintBadge()
         sendResponse(null)
@@ -182,25 +218,28 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       case 'stop':
         await setSession(null)
         await toOffscreen({ type: 'cancel' })
+        try { chrome.tts.stop() } catch { /* синтез не запускался */ }
         await closeOffscreen()
         chrome.notifications.clear(NOTIF_ID)
         sendResponse(null)
         break
       case 'test-sound': {
+        lastAudioProblem = ''
         const cfg = await getSettings()
-        await toOffscreen({ type: 'announce', gong: true, volume: cfg.volumeLevel, text: '' })
-        sendResponse(null)
+        const ok = await toOffscreen({ type: 'gong', volume: cfg.volumeLevel })
+        sendResponse({ ok: ok === true, problem: lastAudioProblem })
         break
       }
       case 'test-voice': {
+        lastAudioProblem = ''
         const cfg = await getSettings()
-        const phrase = msg.text
-        await toOffscreen({
-          type: 'announce', gong: false, text: phrase,
-          clip: await clipUrl(phrase, cfg.pack),
-          speechVolume: cfg.speechVolume, rate: cfg.speechRate,
+        const clip = await clipUrl(msg.text, cfg.pack)
+        await say(msg.text, cfg)
+        sendResponse({
+          ok: !lastAudioProblem,
+          via: clip ? 'записанный голос' : 'системный синтез',
+          problem: lastAudioProblem,
         })
-        sendResponse(null)
         break
       }
       case 'sync':

@@ -38,11 +38,15 @@ function renderSample() {
 }
 
 let savedTimer = null
-function flash() {
+
+function status(text, ms = 3000) {
+  $('saved').textContent = text
   $('saved').hidden = false
   clearTimeout(savedTimer)
-  savedTimer = setTimeout(() => { $('saved').hidden = true }, 1200)
+  savedTimer = setTimeout(() => { $('saved').hidden = true }, ms)
 }
+
+const flash = () => status('Сохранено', 1200)
 
 async function save(patch) {
   settings = await setSettings(patch)
@@ -56,13 +60,15 @@ function wire() {
   $('pack').addEventListener('change', e => save({ pack: e.target.value }))
   $('name').addEventListener('input', e => save({ name: e.target.value.trim() }))
 
-  $('test').addEventListener('click', () => {
-    // Гонг играет offscreen-документ — тот же путь, что и в реальной заварке.
-    chrome.runtime.sendMessage({ type: 'test-sound' })
+  // Проверки идут тем же путём, что и реальная заварка, и показывают результат:
+  // молчащая кнопка не даёт понять, сломан звук или просто выключен.
+  $('test').addEventListener('click', async () => {
+    const r = await chrome.runtime.sendMessage({ type: 'test-sound' })
+    status(r?.ok ? 'Гонг отправлен' : `Не вышло: ${r?.problem || 'нет ответа от звукового документа'}`)
   })
-  $('test-voice').addEventListener('click', () => {
-    // Озвучиваем ровно ту фразу, что показана в примере.
-    chrome.runtime.sendMessage({ type: 'test-voice', text: sampleFirst() })
+  $('test-voice').addEventListener('click', async () => {
+    const r = await chrome.runtime.sendMessage({ type: 'test-voice', text: sampleFirst() })
+    status(r?.ok ? `Озвучено: ${r.via}` : `Не вышло: ${r?.problem || 'нет ответа'}`)
   })
 
   $('reset-session').addEventListener('click', async () => {
